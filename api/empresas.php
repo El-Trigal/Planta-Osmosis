@@ -15,9 +15,9 @@ if ($method === 'POST') {
     $nombre = trim($data['nombre'] ?? '');
     if ($nombre === '') json_err('El nombre es requerido');
 
-    $stmt = db()->prepare('INSERT INTO empresas (nombre) VALUES (?)');
+    $stmt = db()->prepare('INSERT INTO empresas (nombre) VALUES (?) RETURNING id');
     $stmt->execute([$nombre]);
-    json_ok(['id' => (int)db()->lastInsertId(), 'nombre' => $nombre], 201);
+    json_ok(['id' => (int)$stmt->fetchColumn(), 'nombre' => $nombre], 201);
 }
 
 json_err('Método no permitido', 405);

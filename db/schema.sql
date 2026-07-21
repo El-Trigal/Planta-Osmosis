@@ -1,79 +1,73 @@
 -- =====================================================================
--- Monitoreo Ósmosis Inversa — Esquema MySQL
--- Hostinger Business · Motor InnoDB · utf8mb4
+-- Monitoreo Ósmosis Inversa — Esquema PostgreSQL (Supabase)
 -- =====================================================================
 
-SET NAMES utf8mb4;
-SET FOREIGN_KEY_CHECKS = 0;
+-- ---------------------------------------------------------------------
+-- Tipo enumerado para roles de usuario
+-- ---------------------------------------------------------------------
+DO $$ BEGIN
+    CREATE TYPE rol_usuario AS ENUM ('super', 'admin', 'operario');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ---------------------------------------------------------------------
 -- Empresas
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS empresas (
-    id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    id        SERIAL PRIMARY KEY,
     nombre    VARCHAR(120) NOT NULL,
-    creado_en DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    creado_en TIMESTAMP    NOT NULL DEFAULT now()
+);
 
 -- ---------------------------------------------------------------------
 -- Sedes (plantas) — cada empresa puede tener varias
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS sedes (
-    id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    empresa_id INT UNSIGNED NOT NULL,
+    id         SERIAL PRIMARY KEY,
+    empresa_id INTEGER      NOT NULL REFERENCES empresas (id) ON DELETE CASCADE,
     nombre     VARCHAR(120) NOT NULL,
-    creado_en  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    creado_en  TIMESTAMP    NOT NULL DEFAULT now()
+);
 
 -- ---------------------------------------------------------------------
 -- Usuarios
 -- empresa_id es NULL únicamente para el rol 'super'
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS usuarios (
-    id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-    empresa_id    INT UNSIGNED,
+    id            SERIAL        PRIMARY KEY,
+    empresa_id    INTEGER       REFERENCES empresas (id) ON DELETE SET NULL,
     nombre        VARCHAR(120)  NOT NULL,
-    email         VARCHAR(180)  NOT NULL,
+    email         VARCHAR(180)  NOT NULL UNIQUE,
     password_hash VARCHAR(255)  NOT NULL,
-    rol           ENUM('super','admin','operario') NOT NULL DEFAULT 'operario',
-    activo        TINYINT(1)    NOT NULL DEFAULT 1,
-    creado_en     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_email (email),
-    FOREIGN KEY (empresa_id) REFERENCES empresas (id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    rol           rol_usuario   NOT NULL DEFAULT 'operario',
+    activo        BOOLEAN       NOT NULL DEFAULT TRUE,
+    creado_en     TIMESTAMP     NOT NULL DEFAULT now()
+);
 
 -- ---------------------------------------------------------------------
 -- Sedes accesibles por cada usuario (operario / admin)
 -- El super no necesita filas aquí; ve todo.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS usuario_sedes (
-    usuario_id INT UNSIGNED NOT NULL,
-    sede_id    INT UNSIGNED NOT NULL,
-    PRIMARY KEY (usuario_id, sede_id),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE CASCADE,
-    FOREIGN KEY (sede_id)    REFERENCES sedes    (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    usuario_id INTEGER NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+    sede_id    INTEGER NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
+    PRIMARY KEY (usuario_id, sede_id)
+);
 
 -- ---------------------------------------------------------------------
 -- Períodos mensuales por sede
 -- UNIQUE(sede_id, mes, anio) impide duplicar el mismo mes
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS periodos (
-    id         INT UNSIGNED     NOT NULL AUTO_INCREMENT,
-    sede_id    INT UNSIGNED     NOT NULL,
-    mes        TINYINT UNSIGNED NOT NULL COMMENT '1..12',
-    anio       SMALLINT UNSIGNED NOT NULL,
-    dias       TINYINT UNSIGNED NOT NULL DEFAULT 30,
-    tolerancia TINYINT UNSIGNED NOT NULL DEFAULT 10,
-    creado_en  DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_periodo (sede_id, mes, anio),
-    FOREIGN KEY (sede_id) REFERENCES sedes (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    id         SERIAL    PRIMARY KEY,
+    sede_id    INTEGER   NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
+    mes        SMALLINT  NOT NULL CHECK (mes BETWEEN 1 AND 12),
+    anio       SMALLINT  NOT NULL,
+    dias       SMALLINT  NOT NULL DEFAULT 30,
+    tolerancia SMALLINT  NOT NULL DEFAULT 10,
+    creado_en  TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (sede_id, mes, anio)
+);
 
 -- ---------------------------------------------------------------------
 -- Mediciones (una fila = un día + un parámetro dentro de un período)
@@ -81,25 +75,34 @@ CREATE TABLE IF NOT EXISTS periodos (
 -- UNIQUE(periodo_id, dia, param_id) garantiza una sola celda por combo
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mediciones (
-    id             INT UNSIGNED     NOT NULL AUTO_INCREMENT,
-    periodo_id     INT UNSIGNED     NOT NULL,
-    dia            TINYINT UNSIGNED NOT NULL COMMENT '1..31',
-    param_id       VARCHAR(20)      NOT NULL,
-    valor          DECIMAL(10,4),
-    usuario_id     INT UNSIGNED     NOT NULL,
-    actualizado_en DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                    ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_medicion (periodo_id, dia, param_id),
-    FOREIGN KEY (periodo_id) REFERENCES periodos (id) ON DELETE CASCADE,
-    FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    id             SERIAL        PRIMARY KEY,
+    periodo_id     INTEGER       NOT NULL REFERENCES periodos (id) ON DELETE CASCADE,
+    dia            SMALLINT      NOT NULL CHECK (dia BETWEEN 1 AND 31),
+    param_id       VARCHAR(20)   NOT NULL,
+    valor          NUMERIC(10,4),
+    usuario_id     INTEGER       NOT NULL REFERENCES usuarios (id),
+    actualizado_en TIMESTAMP     NOT NULL DEFAULT now(),
+    UNIQUE (periodo_id, dia, param_id)
+);
 
-SET FOREIGN_KEY_CHECKS = 1;
+-- Equivalente a MySQL "ON UPDATE CURRENT_TIMESTAMP" para mediciones.actualizado_en
+CREATE OR REPLACE FUNCTION set_actualizado_en()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.actualizado_en = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_mediciones_actualizado_en ON mediciones;
+CREATE TRIGGER trg_mediciones_actualizado_en
+    BEFORE UPDATE ON mediciones
+    FOR EACH ROW
+    EXECUTE FUNCTION set_actualizado_en();
 
 -- =====================================================================
 -- Para crear el primer usuario 'super' después de importar este esquema,
--- ejecuta en phpMyAdmin (ajusta email y contraseña):
+-- ejecuta en el SQL Editor de Supabase (ajusta email y contraseña):
 --
 --   INSERT INTO usuarios (nombre, email, password_hash, rol)
 --   VALUES (

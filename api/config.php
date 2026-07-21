@@ -1,14 +1,16 @@
 <?php
 // =====================================================================
-// Configuración — reemplaza los valores con los de Hostinger hPanel
+// Configuración — reemplaza los valores con los de tu proyecto Supabase
 // =====================================================================
 
-// Credenciales MySQL (Hostinger → Bases de datos → MySQL)
-define('DB_HOST',    'localhost');
-define('DB_NAME',    'NOMBRE_DE_TU_BASE');   // ej. u123456789_osmosis
-define('DB_USER',    'USUARIO_MYSQL');        // ej. u123456789_admin
-define('DB_PASS',    'CONTRASEÑA_MYSQL');
-define('DB_CHARSET', 'utf8mb4');
+// Credenciales Postgres (Supabase → Project Settings → Database → Connection string)
+// Usa el "Session pooler" (puerto 5432) o "Transaction pooler" (puerto 6543) de Supabase,
+// no la conexión directa, ya que el hosting PHP abre una conexión nueva por cada request.
+define('DB_HOST',    'HOST_DE_TU_PROYECTO.pooler.supabase.com');
+define('DB_PORT',    '5432');
+define('DB_NAME',    'postgres');
+define('DB_USER',    'postgres.TU_REF_DE_PROYECTO');
+define('DB_PASS',    'CONTRASEÑA_SUPABASE');
 
 // Dominio de la app (se usa en la cookie de sesión)
 define('APP_DOMAIN', 'plantaosmosis.trigal-digital.com');

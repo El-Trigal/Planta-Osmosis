@@ -52,10 +52,10 @@ if ($method === 'POST') {
 
     try {
         $stmt = db()->prepare(
-            'INSERT INTO periodos (sede_id, mes, anio, dias, tolerancia) VALUES (?,?,?,?,?)'
+            'INSERT INTO periodos (sede_id, mes, anio, dias, tolerancia) VALUES (?,?,?,?,?) RETURNING id'
         );
         $stmt->execute([$sede_id, $mes, $anio, $dias, $tolerancia]);
-        $id = (int)db()->lastInsertId();
+        $id = (int)$stmt->fetchColumn();
         json_ok([
             'id'         => $id,
             'sede_id'    => $sede_id,
@@ -65,7 +65,7 @@ if ($method === 'POST') {
             'tolerancia' => $tolerancia,
         ], 201);
     } catch (PDOException $e) {
-        if (str_contains($e->getMessage(), 'Duplicate entry')) {
+        if ($e->getCode() === '23505') {
             json_err('Ya existe un período para esa sede/mes/año', 409);
         }
         throw $e;

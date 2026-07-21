@@ -20,7 +20,9 @@ function usuario_con_sedes(array $row): array {
 function asignar_sedes(int $uid, array $sedes_ids, int $empresa_id): void {
     $pdo = db();
     $pdo->prepare('DELETE FROM usuario_sedes WHERE usuario_id = ?')->execute([$uid]);
-    $ins  = $pdo->prepare('INSERT IGNORE INTO usuario_sedes (usuario_id, sede_id) VALUES (?,?)');
+    $ins  = $pdo->prepare(
+        'INSERT INTO usuario_sedes (usuario_id, sede_id) VALUES (?,?) ON CONFLICT DO NOTHING'
+    );
     $chk  = $pdo->prepare('SELECT id FROM sedes WHERE id = ? AND empresa_id = ?');
     foreach ($sedes_ids as $sid) {
         $chk->execute([(int)$sid, $empresa_id]);
@@ -79,12 +81,12 @@ if ($method === 'POST') {
 
     try {
         $stmt = $pdo->prepare(
-            'INSERT INTO usuarios (empresa_id, nombre, email, password_hash, rol) VALUES (?,?,?,?,?)'
+            'INSERT INTO usuarios (empresa_id, nombre, email, password_hash, rol) VALUES (?,?,?,?,?) RETURNING id'
         );
         $stmt->execute([$empresa_id, $nombre, $email, $hash, $rol]);
-        $nuevo_id = (int)$pdo->lastInsertId();
+        $nuevo_id = (int)$stmt->fetchColumn();
     } catch (PDOException $e) {
-        if (str_contains($e->getMessage(), 'Duplicate entry')) {
+        if ($e->getCode() === '23505') {
             json_err('El email ya está registrado', 409);
         }
         throw $e;

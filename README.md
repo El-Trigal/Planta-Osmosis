@@ -7,23 +7,24 @@ Dominio: `plantaosmosis.trigal-digital.com`
 ## Estructura de archivos
 
 ```
-db/schema.sql          → Esquema MySQL (importar en phpMyAdmin)
+db/schema.sql          → Esquema PostgreSQL (importar en el SQL Editor de Supabase)
 api/                   → API PHP (subir a public_html/api/)
 web/                   → Proyecto Vite (compilar → subir dist/ a public_html/)
 ```
 
 ---
 
-## Paso 1 — Crear la base de datos MySQL en hPanel
+## Paso 1 — Crear el proyecto y la base de datos en Supabase
 
-1. Entrar a **hPanel → Bases de datos → MySQL**.
-2. Crear una nueva base de datos. Anota:
-   - Nombre de la base: `u123456789_osmosis` (ejemplo)
-   - Usuario MySQL: `u123456789_admin`
-   - Contraseña MySQL: (la que definas)
-3. En el mismo panel, abrir **phpMyAdmin**.
-4. Seleccionar la base recién creada.
-5. Ir a la pestaña **Importar** y cargar `db/schema.sql`.
+1. Crear un proyecto en [supabase.com](https://supabase.com) (anota la contraseña de la base al crearlo).
+2. Ir a **SQL Editor** → pegar el contenido de `db/schema.sql` → **Run**.
+3. Ir a **Project Settings → Database → Connection string** y copiar los datos del **Session pooler** (puerto `5432`):
+   - Host: algo como `aws-0-xxxx.pooler.supabase.com`
+   - User: `postgres.TU_REF_DE_PROYECTO`
+   - Database: `postgres`
+   - Password: la que definiste al crear el proyecto
+
+   Usa el pooler (no la conexión directa) porque el hosting PHP abre una conexión nueva en cada request y la conexión directa tiene un límite bajo de conexiones concurrentes.
 
 ---
 
@@ -32,13 +33,16 @@ web/                   → Proyecto Vite (compilar → subir dist/ a public_html
 Editar `api/config.php` con los valores reales:
 
 ```php
-define('DB_HOST',  'localhost');
-define('DB_NAME',  'u123456789_osmosis');
-define('DB_USER',  'u123456789_admin');
-define('DB_PASS',  'TuContraseñaMySQL');
+define('DB_HOST', 'aws-0-xxxx.pooler.supabase.com');
+define('DB_PORT', '5432');
+define('DB_NAME', 'postgres');
+define('DB_USER', 'postgres.TU_REF_DE_PROYECTO');
+define('DB_PASS', 'TuContraseñaSupabase');
 define('APP_DOMAIN', 'plantaosmosis.trigal-digital.com');
 define('APP_HTTPS', true);
 ```
+
+> **Importante:** la API usa el driver `pdo_pgsql` de PHP para hablar con Postgres. En hPanel de Hostinger, ve a **Sitios web → Administrar → PHP Configuration → Extensiones** y confirma que `pdo_pgsql` (y `pgsql`) estén activadas antes de subir la API; no todos los planes las traen activas por defecto.
 
 ---
 
@@ -158,7 +162,7 @@ npm run dev
 
 Acceder a `http://localhost:5173` (Vite redirige `/api` a PHP por el proxy configurado en `vite.config.js`).
 
-Necesitarás una base MySQL local con el mismo esquema y ajustar `api/config.php` con `APP_HTTPS = false`.
+Puedes apuntar directamente al mismo proyecto Supabase (no hace falta una base local) y ajustar `api/config.php` con `APP_HTTPS = false`.
 
 ---
 

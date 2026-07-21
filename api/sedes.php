@@ -55,9 +55,9 @@ if ($method === 'POST') {
         json_err('Solo puedes crear sedes en tu empresa', 403);
     }
 
-    $stmt = db()->prepare('INSERT INTO sedes (empresa_id, nombre) VALUES (?,?)');
+    $stmt = db()->prepare('INSERT INTO sedes (empresa_id, nombre) VALUES (?,?) RETURNING id');
     $stmt->execute([$empresa_id, $nombre]);
-    json_ok(['id' => (int)db()->lastInsertId(), 'nombre' => $nombre, 'empresa_id' => $empresa_id], 201);
+    json_ok(['id' => (int)$stmt->fetchColumn(), 'nombre' => $nombre, 'empresa_id' => $empresa_id], 201);
 }
 
 json_err('Método no permitido', 405);
