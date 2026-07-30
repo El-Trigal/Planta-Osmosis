@@ -1,168 +1,98 @@
-# Monitoreo Ósmosis Inversa — Despliegue en Hostinger Business
+# Monitoreo Ósmosis Inversa
 
-Dominio: `plantaosmosis.trigal-digital.com`
+Stack 100% Supabase + GitHub Pages: no hay servidor propio que mantener.
+
+- **Base de datos y autenticación**: Supabase (Postgres + Auth). Toda la
+  autorización (quién ve/edita qué según rol y empresa/sede) vive en Row
+  Level Security de Postgres, no en código de aplicación.
+- **Único código de servidor**: una Edge Function de Supabase
+  (`gestionar-usuario`), necesaria solo porque crear/desactivar cuentas y
+  resetear contraseñas requiere la Admin API de Supabase Auth.
+- **Frontend**: Vite/React, habla directo con Supabase vía
+  `@supabase/supabase-js`. Se despliega como sitio estático en GitHub
+  Pages con GitHub Actions.
 
 ---
 
 ## Estructura de archivos
 
 ```
-db/schema.sql          → Esquema PostgreSQL (importar en el SQL Editor de Supabase)
-api/                   → API PHP (subir a public_html/api/)
-web/                   → Proyecto Vite (compilar → subir dist/ a public_html/)
+db/schema.sql                              → Tablas, constraints y triggers
+db/rls.sql                                 → Funciones helper y políticas RLS (correr después de schema.sql)
+supabase/functions/gestionar-usuario/      → Edge Function (crear/editar usuarios)
+web/                                       → Proyecto Vite/React
+.github/workflows/deploy.yml               → Build + deploy a GitHub Pages en cada push a main
 ```
 
 ---
 
-## Paso 1 — Crear el proyecto y la base de datos en Supabase
+## Paso 1 — Crear el proyecto en Supabase
 
 1. Crear un proyecto en [supabase.com](https://supabase.com) (anota la contraseña de la base al crearlo).
-2. Ir a **SQL Editor** → pegar el contenido de `db/schema.sql` → **Run**.
-3. Ir a **Project Settings → Database → Connection string** y copiar los datos del **Session pooler** (puerto `5432`):
-   - Host: algo como `aws-0-xxxx.pooler.supabase.com`
-   - User: `postgres.TU_REF_DE_PROYECTO`
-   - Database: `postgres`
-   - Password: la que definiste al crear el proyecto
-
-   Usa el pooler (no la conexión directa) porque el hosting PHP abre una conexión nueva en cada request y la conexión directa tiene un límite bajo de conexiones concurrentes.
+2. En el **SQL Editor**: pegar y correr `db/schema.sql`, y luego `db/rls.sql`, en ese orden.
 
 ---
 
-## Paso 2 — Configurar credenciales de la API
+## Paso 2 — Configurar el frontend
 
-Editar `api/config.php` con los valores reales:
+Editar `web/.env` con los valores reales (**Project Settings → API**):
 
-```php
-define('DB_HOST', 'aws-0-xxxx.pooler.supabase.com');
-define('DB_PORT', '5432');
-define('DB_NAME', 'postgres');
-define('DB_USER', 'postgres.TU_REF_DE_PROYECTO');
-define('DB_PASS', 'TuContraseñaSupabase');
-define('APP_DOMAIN', 'plantaosmosis.trigal-digital.com');
-define('APP_HTTPS', true);
+```
+VITE_SUPABASE_URL=https://TU_REF_DE_PROYECTO.supabase.co
+VITE_SUPABASE_ANON_KEY=TU_ANON_KEY_PUBLICA
 ```
 
-> **Importante:** la API usa el driver `pdo_pgsql` de PHP para hablar con Postgres. En hPanel de Hostinger, ve a **Sitios web → Administrar → PHP Configuration → Extensiones** y confirma que `pdo_pgsql` (y `pgsql`) estén activadas antes de subir la API; no todos los planes las traen activas por defecto.
+Estos dos valores son públicos por diseño (viajan en el bundle del navegador); la protección real la da RLS, no el secreto de estos valores. Sí son commiteables.
 
 ---
 
-## Paso 3 — Crear el primer usuario Super
+## Paso 3 — Desplegar la Edge Function
 
-Crear el archivo `create_super.php` en la raíz del servidor (temporalmente):
+Necesita `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `SUPABASE_SERVICE_ROLE_KEY` (Supabase los inyecta automáticamente como variables de entorno a toda Edge Function — no hay que configurarlos a mano).
 
-```php
-<?php
-require_once __DIR__ . '/api/config.php';
-require_once __DIR__ . '/api/db.php';
+Con la [Supabase CLI](https://supabase.com/docs/guides/cli):
 
-$nombre   = 'Super Admin';            // cambia a lo que quieras
-$email    = 'super@tudominio.com';    // cambia
-$password = 'CambiaEstaContraseña1!'; // mínimo 8 chars
-
-$hash = password_hash($password, PASSWORD_BCRYPT);
-db()->prepare(
-    "INSERT INTO usuarios (nombre, email, password_hash, rol) VALUES (?,?,?,?)"
-)->execute([$nombre, $email, $hash, 'super']);
-
-echo 'Usuario super creado. ELIMINA ESTE ARCHIVO AHORA.';
+```bash
+npx supabase login
+npx supabase link --project-ref TU_REF_DE_PROYECTO
+npx supabase functions deploy gestionar-usuario
 ```
 
-Acceder una vez a `https://plantaosmosis.trigal-digital.com/create_super.php` y luego **eliminar el archivo** inmediatamente.
+O pegar el contenido de `supabase/functions/gestionar-usuario/index.ts` directamente en **Dashboard → Edge Functions → New Function → Deploy**.
 
 ---
 
-## Paso 4 — Compilar el front-end React
+## Paso 4 — Crear el primer usuario `super`
 
-En tu máquina local, desde la carpeta `web/`:
+Como las credenciales ahora las gestiona Supabase Auth, no un `INSERT` directo:
+
+1. **Authentication → Users → Add user** en el dashboard de Supabase. Marca "Auto Confirm User". Copia el UUID generado.
+2. En el **SQL Editor**, ejecuta (ajusta el UUID, nombre y email):
+
+```sql
+INSERT INTO usuarios (id, nombre, email, rol)
+VALUES ('UUID-COPIADO-DEL-PASO-ANTERIOR', 'Super Admin', 'super@tudominio.com', 'super');
+```
+
+---
+
+## Paso 5 — Desplegar el frontend en GitHub Pages
+
+1. En el repo de GitHub: **Settings → Pages → Build and deployment → Source → GitHub Actions**.
+2. Cualquier push a `main` dispara `.github/workflows/deploy.yml`, que compila `web/` y publica `web/dist/` en Pages.
+3. El sitio queda en `https://<organización>.github.io/Planta-Osmosis/` (ajusta `base` en `web/vite.config.js` si el nombre del repo cambia).
+
+---
+
+## Desarrollo local
 
 ```bash
 cd web
 npm install
-npm run build
-```
-
-Esto genera la carpeta `web/dist/` con los archivos estáticos.
-
----
-
-## Paso 5 — Subir archivos al servidor
-
-Usando el **Administrador de archivos de hPanel** o FTP (FileZilla):
-
-### Subir el front compilado
-Copiar **el contenido** de `web/dist/` (no la carpeta en sí) a `public_html/`:
-```
-public_html/
-  index.html
-  assets/
-    index-xxxx.js
-    index-xxxx.css
-```
-
-### Subir la API PHP
-Copiar la carpeta `api/` completa a `public_html/api/`:
-```
-public_html/api/
-  .htaccess
-  config.php
-  db.php
-  helpers.php
-  login.php
-  logout.php
-  me.php
-  empresas.php
-  sedes.php
-  usuarios.php
-  periodos.php
-  mediciones.php
-```
-
-### Crear .htaccess raíz (public_html/.htaccess)
-Si no existe, crear con este contenido para forzar HTTPS:
-
-```apache
-RewriteEngine On
-RewriteCond %{HTTPS} off
-RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-```
-
----
-
-## Paso 6 — Activar SSL
-
-En **hPanel → SSL → Instalar** → seleccionar tu dominio → activar Let's Encrypt (gratuito).
-
----
-
-## Paso 7 — Verificar la instalación
-
-1. Acceder a `https://plantaosmosis.trigal-digital.com`
-2. Debe aparecer la pantalla de login.
-3. Ingresar con el usuario super creado en el Paso 3.
-4. En el **Panel Admin** (esquina superior derecha):
-   - Crear empresa(s)
-   - Crear sede(s) dentro de cada empresa
-   - Crear administradores para cada empresa
-5. Cada admin puede crear operarios y asignarles sedes.
-
----
-
-## Desarrollo local (opcional)
-
-Para probar en tu máquina antes de subir:
-
-```bash
-# Terminal 1 — servidor PHP (desde la raíz del proyecto)
-php -S localhost:8000
-
-# Terminal 2 — Vite dev server
-cd web
 npm run dev
 ```
 
-Acceder a `http://localhost:5173` (Vite redirige `/api` a PHP por el proxy configurado en `vite.config.js`).
-
-Puedes apuntar directamente al mismo proyecto Supabase (no hace falta una base local) y ajustar `api/config.php` con `APP_HTTPS = false`.
+Abre `http://localhost:5173`. Habla directo contra el proyecto Supabase configurado en `web/.env` — no hace falta nada local aparte del frontend.
 
 ---
 
@@ -178,8 +108,8 @@ Puedes apuntar directamente al mismo proyecto Supabase (no hace falta una base l
 
 ## Notas de seguridad
 
-- Las contraseñas se almacenan con `password_hash()` (bcrypt).
-- Las sesiones usan cookies `httponly + SameSite=Strict`.
-- Todas las escrituras requieren token CSRF en el header `X-CSRF-Token`.
-- El control de propiedad por celda se valida siempre en el servidor (HTTP 403 si viola la regla).
-- Ningún archivo de configuración (`config.php`, `db.php`, `helpers.php`) es accesible directamente por HTTP (bloqueado por `.htaccess`).
+- Las credenciales las gestiona Supabase Auth (no hay `password_hash` propio).
+- Cada tabla tiene Row Level Security habilitado; `usuarios` y `usuario_sedes` solo son legibles por el cliente — toda escritura pasa por la Edge Function `gestionar-usuario`.
+- Desactivar un usuario (`activo = false`) también revoca sus sesiones activas en Supabase Auth (`ban_duration`), no solo el acceso a datos vía RLS.
+- Ni `mediciones.usuario_id` ni `usuarios.rol/empresa_id/email` son editables por un UPDATE normal del cliente (triggers de "columnas protegidas" en `db/rls.sql`), igual que en el modelo original.
+- Esta app no tiene ninguna superficie anónima: `anon` no tiene permisos sobre ninguna tabla.

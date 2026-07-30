@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Droplets, ChevronRight } from 'lucide-react';
-import { api } from '../lib/api';
+import { supabase } from '../lib/supabase';
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
@@ -8,8 +8,10 @@ function diasEnMes(mesIdx, anio) {
   return new Date(anio, mesIdx + 1, 0).getDate();
 }
 
-export default function SedePeriodoSelector({ sedes, onSeleccion }) {
-  const [sedeId, setSedeId] = useState(sedes[0]?.id ?? null);
+export default function SedePeriodoSelector({ onSeleccion }) {
+  const [sedes, setSedes] = useState([]);
+  const [cargandoSedes, setCargandoSedes] = useState(true);
+  const [sedeId, setSedeId] = useState(null);
   const [periodos, setPeriodos] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
@@ -18,15 +20,44 @@ export default function SedePeriodoSelector({ sedes, onSeleccion }) {
   const [anio, setAnio] = useState(hoy.getFullYear());
   const [tolerancia, setTolerancia] = useState(10);
 
+  useEffect(() => {
+    supabase
+      .from('sedes')
+      .select('id, nombre, empresa_id, empresas(nombre)')
+      .order('nombre')
+      .then(({ data, error: err }) => {
+        if (err) {
+          setError(err.message);
+          setCargandoSedes(false);
+          return;
+        }
+        const lista = (data || []).map((s) => ({
+          id: s.id,
+          nombre: s.nombre,
+          empresa_id: s.empresa_id,
+          empresa_nombre: s.empresas?.nombre,
+        }));
+        setSedes(lista);
+        setSedeId(lista[0]?.id ?? null);
+        setCargandoSedes(false);
+      });
+  }, []);
+
   const cargarPeriodos = useCallback(() => {
     if (!sedeId) return;
     setCargando(true);
     setError('');
-    api
-      .get(`/periodos.php?sede_id=${sedeId}`)
-      .then(setPeriodos)
-      .catch((e) => setError(e.message))
-      .finally(() => setCargando(false));
+    supabase
+      .from('periodos')
+      .select('*')
+      .eq('sede_id', sedeId)
+      .order('anio', { ascending: false })
+      .order('mes', { ascending: false })
+      .then(({ data, error: err }) => {
+        if (err) setError(err.message);
+        else setPeriodos(data || []);
+        setCargando(false);
+      });
   }, [sedeId]);
 
   useEffect(() => {
@@ -35,19 +66,21 @@ export default function SedePeriodoSelector({ sedes, onSeleccion }) {
 
   async function crearPeriodo() {
     setError('');
-    try {
-      const dias = diasEnMes(mesIdx, anio);
-      const nuevo = await api.post('/periodos.php', {
-        sede_id: sedeId,
-        mes: mesIdx + 1,
-        anio,
-        dias,
-        tolerancia,
-      });
-      onSeleccion(sedes.find((s) => s.id === sedeId), nuevo);
-    } catch (e) {
-      setError(e.message);
+    const dias = diasEnMes(mesIdx, anio);
+    const { data, error: err } = await supabase
+      .from('periodos')
+      .insert({ sede_id: sedeId, mes: mesIdx + 1, anio, dias, tolerancia })
+      .select()
+      .single();
+    if (err) {
+      setError(err.code === '23505' ? 'Ya existe un período para esa sede/mes/año' : err.message);
+      return;
     }
+    onSeleccion(sedes.find((s) => s.id === sedeId), data);
+  }
+
+  if (cargandoSedes) {
+    return <p className="text-sm p-6" style={{ color: '#94a3b8' }}>Cargando…</p>;
   }
 
   if (sedes.length === 0) {

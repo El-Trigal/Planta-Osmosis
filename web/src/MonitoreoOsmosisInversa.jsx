@@ -25,7 +25,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { api } from "./lib/api";
+import { supabase } from "./lib/supabase";
 
 /* ───────────────────────────── MODELO DE DATOS ───────────────────────────── */
 
@@ -227,16 +227,19 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     async (silencioso) => {
       if (!silencioso) setRefrescando(true);
       try {
-        const data = await api.get(`/mediciones.php?periodo_id=${periodo.id}`);
+        const { data, error } = await supabase
+          .from("mediciones")
+          .select("dia, param_id, valor, usuario_id, usuarios(nombre)")
+          .eq("periodo_id", periodo.id);
+        if (error) throw error;
         const regs = {};
         const dus = {};
-        for (const [dia, params] of Object.entries(data)) {
-          regs[dia] = {};
-          dus[dia] = {};
-          for (const [paramId, info] of Object.entries(params)) {
-            regs[dia][paramId] = info.valor === null ? "" : info.valor;
-            dus[dia][paramId] = { usuario_id: info.usuario_id, usuario_nombre: info.usuario_nombre };
-          }
+        for (const row of data || []) {
+          regs[row.dia] = { ...(regs[row.dia] || {}), [row.param_id]: row.valor === null ? "" : row.valor };
+          dus[row.dia] = {
+            ...(dus[row.dia] || {}),
+            [row.param_id]: { usuario_id: row.usuario_id, usuario_nombre: row.usuarios?.nombre },
+          };
         }
         setRegistros(regs);
         setDuenos(dus);
@@ -256,26 +259,46 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
   async function guardarCelda(dia, paramId, valorRaw) {
     try {
-      const resp = await api.post("/mediciones.php", {
-        periodo_id: periodo.id,
-        dia,
-        param_id: paramId,
-        valor: valorRaw === "" || valorRaw === undefined ? null : valorRaw,
-      });
-      if (resp.eliminado) {
+      const vacio = valorRaw === "" || valorRaw === undefined || valorRaw === null;
+
+      if (vacio) {
+        const { error } = await supabase
+          .from("mediciones")
+          .delete()
+          .eq("periodo_id", periodo.id)
+          .eq("dia", dia)
+          .eq("param_id", paramId);
+        if (error) throw error;
         setDuenos((prev) => {
           const dia_ = { ...(prev[dia] || {}) };
           delete dia_[paramId];
           return { ...prev, [dia]: dia_ };
         });
-      } else if (resp.updated || resp.created) {
-        setDuenos((prev) => ({
-          ...prev,
-          [dia]: { ...(prev[dia] || {}), [paramId]: { usuario_id: resp.usuario_id, usuario_nombre: resp.usuario_nombre } },
-        }));
+        return;
       }
+
+      const valorStr = String(valorRaw).replace(",", ".").trim();
+      if (!valorStr || Number.isNaN(Number(valorStr))) return; // ya se marca "invalid" en pantalla
+
+      const { data, error } = await supabase
+        .from("mediciones")
+        .upsert(
+          { periodo_id: periodo.id, dia, param_id: paramId, valor: Number(valorStr), usuario_id: usuario.id },
+          { onConflict: "periodo_id,dia,param_id" }
+        )
+        .select("usuario_id, usuarios(nombre)")
+        .single();
+      if (error) throw error;
+
+      setDuenos((prev) => ({
+        ...prev,
+        [dia]: { ...(prev[dia] || {}), [paramId]: { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre } },
+      }));
     } catch (e) {
-      mostrarToast("error", e.message || "No se pudo guardar el valor");
+      const msg = /mediciones_valor_check/.test(e.message || "")
+        ? "Valor fuera de rango permitido"
+        : e.message || "No se pudo guardar el valor";
+      mostrarToast("error", msg);
     }
   }
 

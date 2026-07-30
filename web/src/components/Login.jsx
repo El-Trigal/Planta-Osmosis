@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Droplets } from 'lucide-react';
-import { api } from '../lib/api';
+import { supabase } from '../lib/supabase';
 
-export default function Login({ onLogin }) {
+export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -12,14 +12,12 @@ export default function Login({ onLogin }) {
     e.preventDefault();
     setError('');
     setCargando(true);
-    try {
-      const data = await api.post('/login.php', { email, password });
-      onLogin(data);
-    } catch (err) {
-      setError(err.message || 'No se pudo iniciar sesión');
-    } finally {
-      setCargando(false);
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    if (authError) {
+      setError(authError.message === 'Invalid login credentials' ? 'Credenciales incorrectas' : authError.message);
     }
+    // Si no hubo error, App.jsx reacciona solo via onAuthStateChange.
+    setCargando(false);
   }
 
   return (

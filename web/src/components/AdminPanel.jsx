@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Building2, MapPin, Users, Plus } from 'lucide-react';
-import { api } from '../lib/api';
+import { supabase, invocarGestionUsuario } from '../lib/supabase';
 
 const inputStyle = { border: '1.5px solid #cbd5e1', outline: 'none' };
 
@@ -26,15 +26,39 @@ export default function AdminPanel({ usuario }) {
 
   const cargarEmpresas = useCallback(() => {
     if (!esSuper) return;
-    api.get('/empresas.php').then(setEmpresas).catch((e) => setError(e.message));
+    supabase
+      .from('empresas')
+      .select('*')
+      .order('nombre')
+      .then(({ data, error: err }) => (err ? setError(err.message) : setEmpresas(data || [])));
   }, [esSuper]);
 
   const cargarSedes = useCallback(() => {
-    api.get('/sedes.php').then(setSedes).catch((e) => setError(e.message));
+    supabase
+      .from('sedes')
+      .select('*, empresas(nombre)')
+      .order('nombre')
+      .then(({ data, error: err }) => {
+        if (err) {
+          setError(err.message);
+          return;
+        }
+        setSedes((data || []).map((s) => ({ ...s, empresa_nombre: s.empresas?.nombre })));
+      });
   }, []);
 
   const cargarUsuarios = useCallback(() => {
-    api.get('/usuarios.php').then(setUsuarios).catch((e) => setError(e.message));
+    supabase
+      .from('usuarios')
+      .select('*, usuario_sedes(sede_id)')
+      .order('nombre')
+      .then(({ data, error: err }) => {
+        if (err) {
+          setError(err.message);
+          return;
+        }
+        setUsuarios((data || []).map((u) => ({ ...u, sedes: (u.usuario_sedes || []).map((x) => x.sede_id) })));
+      });
   }, []);
 
   useEffect(() => {
@@ -90,12 +114,11 @@ function EmpresasTab({ empresas, onChange, onError }) {
 
   async function crear() {
     if (!nombre.trim()) return;
-    try {
-      await api.post('/empresas.php', { nombre: nombre.trim() });
+    const { error } = await supabase.from('empresas').insert({ nombre: nombre.trim() });
+    if (error) onError(error.message);
+    else {
       setNombre('');
       onChange();
-    } catch (e) {
-      onError(e.message);
     }
   }
 
@@ -129,14 +152,12 @@ function SedesTab({ sedes, empresas, usuario, onChange, onError }) {
 
   async function crear() {
     if (!nombre.trim()) return;
-    try {
-      const payload = { nombre: nombre.trim() };
-      if (esSuper) payload.empresa_id = Number(empresaId);
-      await api.post('/sedes.php', payload);
+    const payload = { nombre: nombre.trim(), empresa_id: esSuper ? Number(empresaId) : usuario.empresa_id };
+    const { error } = await supabase.from('sedes').insert(payload);
+    if (error) onError(error.message);
+    else {
       setNombre('');
       onChange();
-    } catch (e) {
-      onError(e.message);
     }
   }
 
@@ -194,7 +215,8 @@ function UsuariosTab({ usuarios, sedes, empresas, usuario, onChange, onError }) 
       return;
     }
     try {
-      await api.post('/usuarios.php', {
+      await invocarGestionUsuario({
+        accion: 'crear',
         nombre: nombre.trim(),
         email: email.trim(),
         password,
@@ -214,7 +236,7 @@ function UsuariosTab({ usuarios, sedes, empresas, usuario, onChange, onError }) 
 
   async function toggleActivo(u) {
     try {
-      await api.put('/usuarios.php', { id: u.id, activo: !u.activo });
+      await invocarGestionUsuario({ accion: 'actualizar', id: u.id, activo: !u.activo });
       onChange();
     } catch (e) {
       onError(e.message);

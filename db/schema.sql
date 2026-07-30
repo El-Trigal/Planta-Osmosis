@@ -1,5 +1,7 @@
 -- =====================================================================
--- Monitoreo Ósmosis Inversa — Esquema PostgreSQL (Supabase)
+-- Monitoreo Ósmosis Inversa — Esquema PostgreSQL (Supabase-nativo)
+-- La autenticación la gestiona Supabase Auth (auth.users); usuarios.id
+-- referencia directamente ese id, no hay password_hash propio.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -10,46 +12,57 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Rebuild limpio: no hay datos reales todavía en el proyecto.
+DROP TABLE IF EXISTS mediciones CASCADE;
+DROP TABLE IF EXISTS periodos CASCADE;
+DROP TABLE IF EXISTS usuario_sedes CASCADE;
+DROP TABLE IF EXISTS usuarios CASCADE;
+DROP TABLE IF EXISTS sedes CASCADE;
+DROP TABLE IF EXISTS empresas CASCADE;
+
 -- ---------------------------------------------------------------------
 -- Empresas
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS empresas (
+CREATE TABLE empresas (
     id        SERIAL PRIMARY KEY,
-    nombre    VARCHAR(120) NOT NULL,
+    nombre    VARCHAR(120) NOT NULL CHECK (btrim(nombre) <> ''),
     creado_en TIMESTAMP    NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------
 -- Sedes (plantas) — cada empresa puede tener varias
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS sedes (
+CREATE TABLE sedes (
     id         SERIAL PRIMARY KEY,
     empresa_id INTEGER      NOT NULL REFERENCES empresas (id) ON DELETE CASCADE,
-    nombre     VARCHAR(120) NOT NULL,
+    nombre     VARCHAR(120) NOT NULL CHECK (btrim(nombre) <> ''),
     creado_en  TIMESTAMP    NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------
--- Usuarios
+-- Usuarios (perfil de autorización; las credenciales viven en auth.users)
 -- empresa_id es NULL únicamente para el rol 'super'
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS usuarios (
-    id            SERIAL        PRIMARY KEY,
+CREATE TABLE usuarios (
+    id            UUID          PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
     empresa_id    INTEGER       REFERENCES empresas (id) ON DELETE SET NULL,
-    nombre        VARCHAR(120)  NOT NULL,
+    nombre        VARCHAR(120)  NOT NULL CHECK (btrim(nombre) <> ''),
     email         VARCHAR(180)  NOT NULL UNIQUE,
-    password_hash VARCHAR(255)  NOT NULL,
     rol           rol_usuario   NOT NULL DEFAULT 'operario',
     activo        BOOLEAN       NOT NULL DEFAULT TRUE,
-    creado_en     TIMESTAMP     NOT NULL DEFAULT now()
+    creado_en     TIMESTAMP     NOT NULL DEFAULT now(),
+    CONSTRAINT usuarios_empresa_rol_check CHECK (
+        (rol = 'super' AND empresa_id IS NULL) OR
+        (rol <> 'super' AND empresa_id IS NOT NULL)
+    )
 );
 
 -- ---------------------------------------------------------------------
 -- Sedes accesibles por cada usuario (operario / admin)
 -- El super no necesita filas aquí; ve todo.
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS usuario_sedes (
-    usuario_id INTEGER NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+CREATE TABLE usuario_sedes (
+    usuario_id UUID    NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
     sede_id    INTEGER NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
     PRIMARY KEY (usuario_id, sede_id)
 );
@@ -58,13 +71,13 @@ CREATE TABLE IF NOT EXISTS usuario_sedes (
 -- Períodos mensuales por sede
 -- UNIQUE(sede_id, mes, anio) impide duplicar el mismo mes
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS periodos (
+CREATE TABLE periodos (
     id         SERIAL    PRIMARY KEY,
     sede_id    INTEGER   NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
     mes        SMALLINT  NOT NULL CHECK (mes BETWEEN 1 AND 12),
-    anio       SMALLINT  NOT NULL,
-    dias       SMALLINT  NOT NULL DEFAULT 30,
-    tolerancia SMALLINT  NOT NULL DEFAULT 10,
+    anio       SMALLINT  NOT NULL CHECK (anio BETWEEN 2000 AND 2100),
+    dias       SMALLINT  NOT NULL DEFAULT 30 CHECK (dias BETWEEN 28 AND 31),
+    tolerancia SMALLINT  NOT NULL DEFAULT 10 CHECK (tolerancia BETWEEN 0 AND 100),
     creado_en  TIMESTAMP NOT NULL DEFAULT now(),
     UNIQUE (sede_id, mes, anio)
 );
@@ -74,13 +87,19 @@ CREATE TABLE IF NOT EXISTS periodos (
 -- usuario_id = dueño de la celda (quien la cargó por última vez)
 -- UNIQUE(periodo_id, dia, param_id) garantiza una sola celda por combo
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mediciones (
+CREATE TABLE mediciones (
     id             SERIAL        PRIMARY KEY,
     periodo_id     INTEGER       NOT NULL REFERENCES periodos (id) ON DELETE CASCADE,
     dia            SMALLINT      NOT NULL CHECK (dia BETWEEN 1 AND 31),
-    param_id       VARCHAR(20)   NOT NULL,
-    valor          NUMERIC(10,4),
-    usuario_id     INTEGER       NOT NULL REFERENCES usuarios (id),
+    param_id       VARCHAR(20)   NOT NULL CHECK (param_id IN (
+                        'pre_ce', 'pre_ph', 'pre_cl', 'pre_al',
+                        'air_ce', 'air_ph', 'air_cl',
+                        'prf_ce', 'prf_ph', 'prf_cl',
+                        'pof_ce', 'pof_ph', 'pof_cl',
+                        'prd_ce', 'prd_ph', 'prd_cl', 'prd_caudal'
+                    )),
+    valor          NUMERIC(10,4) CHECK (valor IS NULL OR valor BETWEEN -9999.9999 AND 99999.9999),
+    usuario_id     UUID          NOT NULL REFERENCES usuarios (id),
     actualizado_en TIMESTAMP     NOT NULL DEFAULT now(),
     UNIQUE (periodo_id, dia, param_id)
 );
@@ -94,23 +113,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_mediciones_actualizado_en ON mediciones;
-CREATE TRIGGER trg_mediciones_actualizado_en
+DROP TRIGGER IF EXISTS trg_10_actualizado_en ON mediciones;
+CREATE TRIGGER trg_10_actualizado_en
     BEFORE UPDATE ON mediciones
     FOR EACH ROW
     EXECUTE FUNCTION set_actualizado_en();
 
+-- Validación cruzada dia <= periodos.dias (no se puede expresar como CHECK
+-- simple porque depende de otra tabla).
+CREATE OR REPLACE FUNCTION validar_dia_mediciones()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_dias SMALLINT;
+BEGIN
+    SELECT dias INTO v_dias FROM periodos WHERE id = NEW.periodo_id;
+    IF v_dias IS NULL OR NEW.dia > v_dias THEN
+        RAISE EXCEPTION 'Día fuera de rango para este período';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_20_validar_dia ON mediciones;
+CREATE TRIGGER trg_20_validar_dia
+    BEFORE INSERT OR UPDATE ON mediciones
+    FOR EACH ROW
+    EXECUTE FUNCTION validar_dia_mediciones();
+
 -- =====================================================================
--- Para crear el primer usuario 'super' después de importar este esquema,
--- ejecuta en el SQL Editor de Supabase (ajusta email y contraseña):
---
---   INSERT INTO usuarios (nombre, email, password_hash, rol)
---   VALUES (
---     'Super Admin',
---     'super@plantaosmosis.trigal-digital.com',
---     '$2y$10$CAMBIA_ESTE_HASH_CON_EL_SCRIPT_create_super.php',
---     'super'
---   );
---
--- O usa el script create_super.php incluido en el README.
+-- Las políticas de Row Level Security, funciones helper y el trigger de
+-- columnas protegidas viven en db/rls.sql — correr ese archivo después
+-- de este. El primer usuario 'super' se crea vía la Auth Admin API
+-- (ver README.md), no con un INSERT directo, porque Supabase Auth debe
+-- conocer sus credenciales.
 -- =====================================================================

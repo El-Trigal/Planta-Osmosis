@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Droplets, LogOut, Settings } from 'lucide-react';
-import { api, setCsrfToken } from './lib/api';
+import { supabase } from './lib/supabase';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import SedePeriodoSelector from './components/SedePeriodoSelector';
@@ -8,42 +8,35 @@ import MonitoreoOsmosisInversa from './MonitoreoOsmosisInversa';
 
 export default function App() {
   const [cargando, setCargando] = useState(true);
-  const [usuario, setUsuario] = useState(null);
-  const [sedes, setSedes] = useState([]);
+  const [session, setSession] = useState(null);
+  const [perfil, setPerfil] = useState(null);
   const [vista, setVista] = useState('monitoreo'); // 'monitoreo' | 'admin'
   const [sede, setSede] = useState(null);
   const [periodo, setPeriodo] = useState(null);
 
-  const aplicarSesion = useCallback((data) => {
-    setUsuario(data.usuario);
-    setCsrfToken(data.csrf_token);
-    setSedes(data.sedes || []);
+  const cargarPerfil = useCallback(async (uid) => {
+    const { data, error } = await supabase.from('usuarios').select('*').eq('id', uid).single();
+    setPerfil(error ? null : data);
   }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const data = await api.get('/me.php');
-        aplicarSesion(data);
-      } catch {
-        setUsuario(null);
-      } finally {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (newSession) {
+        cargarPerfil(newSession.user.id).finally(() => setCargando(false));
+      } else {
+        setPerfil(null);
+        setSede(null);
+        setPeriodo(null);
+        setVista('monitoreo');
         setCargando(false);
       }
-    })();
-  }, [aplicarSesion]);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [cargarPerfil]);
 
   async function handleLogout() {
-    try {
-      await api.post('/logout.php', {});
-    } catch {
-      /* la sesión ya pudo haber expirado */
-    }
-    setUsuario(null);
-    setSedes([]);
-    setSede(null);
-    setPeriodo(null);
-    setVista('monitoreo');
+    await supabase.auth.signOut();
   }
 
   if (cargando) {
@@ -54,9 +47,27 @@ export default function App() {
     );
   }
 
-  if (!usuario) return <Login onLogin={aplicarSesion} />;
+  if (!session || !perfil) return <Login />;
 
-  const esAdminOSuper = usuario.rol === 'super' || usuario.rol === 'admin';
+  if (!perfil.activo) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="max-w-sm text-center">
+          <p className="text-sm font-semibold mb-2">Tu cuenta está desactivada</p>
+          <p className="text-xs mb-4" style={{ color: '#64748b' }}>Contacta a un administrador si crees que es un error.</p>
+          <button
+            onClick={handleLogout}
+            className="rounded-lg px-4 py-2 text-sm font-semibold text-white"
+            style={{ background: '#0369a1' }}
+          >
+            Salir
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const esAdminOSuper = perfil.rol === 'super' || perfil.rol === 'admin';
 
   return (
     <div className="min-h-screen w-full" style={{ background: '#f8fafc', color: '#0f172a' }}>
@@ -70,7 +81,7 @@ export default function App() {
           </div>
           <div>
             <p className="text-sm font-bold leading-tight">Monitoreo Ósmosis Inversa</p>
-            <p className="text-xs opacity-90">{usuario.nombre} · {usuario.rol}</p>
+            <p className="text-xs opacity-90">{perfil.nombre} · {perfil.rol}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -94,10 +105,9 @@ export default function App() {
       </header>
 
       {vista === 'admin' && esAdminOSuper ? (
-        <AdminPanel usuario={usuario} />
+        <AdminPanel usuario={perfil} />
       ) : !periodo ? (
         <SedePeriodoSelector
-          sedes={sedes}
           onSeleccion={(s, p) => {
             setSede(s);
             setPeriodo(p);
@@ -105,7 +115,7 @@ export default function App() {
         />
       ) : (
         <MonitoreoOsmosisInversa
-          usuario={usuario}
+          usuario={perfil}
           sede={sede}
           periodo={periodo}
           onCambiarPeriodo={() => setPeriodo(null)}
