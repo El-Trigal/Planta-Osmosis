@@ -139,6 +139,9 @@ Deno.serve(async (req: Request) => {
     if (caller.rol === "admin" && target.empresa_id !== caller.empresa_id) {
       return json({ error: "Acceso denegado" }, 403);
     }
+    if (targetId === caller.id && body.activo === false) {
+      return json({ error: "No puedes desactivar tu propia cuenta" }, 400);
+    }
 
     const updates: Record<string, unknown> = {};
 

@@ -161,6 +161,14 @@ function SedesTab({ sedes, empresas, usuario, onChange, onError }) {
     }
   }
 
+  if (esSuper && empresas.length === 0) {
+    return (
+      <div className="rounded-xl shadow-sm bg-white p-5 text-sm" style={{ border: '1px solid #e2e8f0', color: '#64748b' }}>
+        Primero crea una empresa en la pestaña <strong>Empresas</strong> — una sede siempre pertenece a una.
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl shadow-sm bg-white p-5" style={{ border: '1px solid #e2e8f0' }}>
       <div className="flex flex-wrap gap-2 mb-4">
@@ -281,21 +289,31 @@ function UsuariosTab({ usuarios, sedes, empresas, usuario, onChange, onError }) 
       </button>
 
       <ul className="divide-y" style={{ borderColor: '#f1f5f9' }}>
-        {usuarios.map((u) => (
-          <li key={u.id} className="py-2 flex items-center justify-between gap-3 text-sm">
-            <div>
-              <p className="font-medium">{u.nombre} <span className="text-xs font-normal" style={{ color: '#94a3b8' }}>({u.rol})</span></p>
-              <p className="text-xs" style={{ color: '#64748b' }}>{u.email}</p>
-            </div>
-            <button
-              onClick={() => toggleActivo(u)}
-              className="text-xs font-semibold rounded-lg px-2.5 py-1.5"
-              style={{ background: u.activo ? '#f0fdf4' : '#fef2f2', color: u.activo ? '#166534' : '#991b1b' }}
-            >
-              {u.activo ? 'Activo' : 'Inactivo'}
-            </button>
-          </li>
-        ))}
+        {usuarios.map((u) => {
+          const esUnoMismo = u.id === usuario.id;
+          return (
+            <li key={u.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+              <div>
+                <p className="font-medium">{u.nombre} <span className="text-xs font-normal" style={{ color: '#94a3b8' }}>({u.rol})</span></p>
+                <p className="text-xs" style={{ color: '#64748b' }}>{u.email}</p>
+              </div>
+              <button
+                onClick={() => toggleActivo(u)}
+                disabled={esUnoMismo}
+                title={esUnoMismo ? 'No puedes desactivar tu propia cuenta' : undefined}
+                className="text-xs font-semibold rounded-lg px-2.5 py-1.5"
+                style={{
+                  background: u.activo ? '#f0fdf4' : '#fef2f2',
+                  color: u.activo ? '#166534' : '#991b1b',
+                  opacity: esUnoMismo ? 0.5 : 1,
+                  cursor: esUnoMismo ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {u.activo ? 'Activo' : 'Inactivo'}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
