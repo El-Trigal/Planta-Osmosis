@@ -15,11 +15,39 @@ export default function App() {
   const [sede, setSede] = useState(null);
   const [periodo, setPeriodo] = useState(null);
   const [recuperando, setRecuperando] = useState(false);
+  // null | 'conexion' | 'sin_perfil' — por qué no hay perfil, que no es lo
+  // mismo que no haber iniciado sesión.
+  const [fallaPerfil, setFallaPerfil] = useState(null);
+  const [reintentando, setReintentando] = useState(false);
 
+  // maybeSingle() en vez de single() para poder separar los dos casos: si
+  // la consulta falla es un problema de conexión (el proyecto Supabase se
+  // auto-pausa por inactividad en el plan gratuito, y ahí toda llamada
+  // falla con la sesión perfectamente válida) y se puede reintentar; si
+  // devuelve cero filas, la cuenta existe en Auth pero nadie le creó su
+  // fila en 'usuarios', y reintentar no va a arreglarlo nunca.
   const cargarPerfil = useCallback(async (uid) => {
-    const { data, error } = await supabase.from('usuarios').select('*').eq('id', uid).single();
-    setPerfil(error ? null : data);
+    const { data, error } = await supabase.from('usuarios').select('*').eq('id', uid).maybeSingle();
+    if (error) {
+      setPerfil(null);
+      setFallaPerfil('conexion');
+      return;
+    }
+    if (!data) {
+      setPerfil(null);
+      setFallaPerfil('sin_perfil');
+      return;
+    }
+    setPerfil(data);
+    setFallaPerfil(null);
   }, []);
+
+  async function reintentarPerfil() {
+    if (!session) return;
+    setReintentando(true);
+    await cargarPerfil(session.user.id);
+    setReintentando(false);
+  }
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((evento, newSession) => {
@@ -38,6 +66,7 @@ export default function App() {
         setPeriodo(null);
         setVista('monitoreo');
         setRecuperando(false);
+        setFallaPerfil(null);
         setCargando(false);
       }
     });
@@ -61,23 +90,55 @@ export default function App() {
   // cargue o su cuenta esté desactivada.
   if (session && recuperando) return <NuevaPassword onListo={() => setRecuperando(false)} />;
 
-  if (!session || !perfil) return <Login />;
+  if (!session) return <Login />;
+
+  // Con sesión válida pero sin perfil, mandar al Login era el peor mensaje
+  // posible: invitaba a reescribir una y otra vez unas credenciales que
+  // estaban bien.
+  if (fallaPerfil === 'conexion') {
+    return (
+      <Aviso
+        titulo="No pudimos cargar tu perfil"
+        detalle="Tu sesión sigue activa; el problema es la conexión con el servidor. Puede ser tu red o que el proyecto esté despertando."
+        onSalir={handleLogout}
+      >
+        <button
+          onClick={reintentarPerfil}
+          disabled={reintentando}
+          className="rounded-lg px-4 py-2 text-sm font-semibold text-white"
+          style={{ background: '#0369a1', opacity: reintentando ? 0.7 : 1 }}
+        >
+          {reintentando ? 'Reintentando…' : 'Reintentar'}
+        </button>
+      </Aviso>
+    );
+  }
+
+  if (fallaPerfil === 'sin_perfil') {
+    return (
+      <Aviso
+        titulo="Tu cuenta no tiene perfil"
+        detalle="El usuario existe pero todavía no fue dado de alta en el sistema. Un administrador tiene que completarlo."
+        onSalir={handleLogout}
+      />
+    );
+  }
+
+  if (!perfil) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
+        Cargando…
+      </div>
+    );
+  }
 
   if (!perfil.activo) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="max-w-sm text-center">
-          <p className="text-sm font-semibold mb-2">Tu cuenta está desactivada</p>
-          <p className="text-xs mb-4" style={{ color: '#64748b' }}>Contacta a un administrador si crees que es un error.</p>
-          <button
-            onClick={handleLogout}
-            className="rounded-lg px-4 py-2 text-sm font-semibold text-white"
-            style={{ background: '#0369a1' }}
-          >
-            Salir
-          </button>
-        </div>
-      </div>
+      <Aviso
+        titulo="Tu cuenta está desactivada"
+        detalle="Contacta a un administrador si crees que es un error."
+        onSalir={handleLogout}
+      />
     );
   }
 
@@ -136,6 +197,31 @@ export default function App() {
           onCambiarPeriodo={() => setPeriodo(null)}
         />
       )}
+    </div>
+  );
+}
+
+// Pantalla completa para los estados en los que hay sesión pero no se
+// puede entrar: cuenta desactivada, perfil que no carga, perfil que no
+// existe. Siempre deja salir, porque cerrar sesión es lo único que la
+// persona puede hacer por su cuenta en cualquiera de los tres casos.
+function Aviso({ titulo, detalle, onSalir, children }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="max-w-sm text-center">
+        <p className="text-sm font-semibold mb-2">{titulo}</p>
+        <p className="text-xs mb-4" style={{ color: '#64748b' }}>{detalle}</p>
+        <div className="flex items-center justify-center gap-2">
+          {children}
+          <button
+            onClick={onSalir}
+            className="rounded-lg px-4 py-2 text-sm font-semibold"
+            style={children ? { background: '#f1f5f9', color: '#475569' } : { background: '#0369a1', color: '#fff' }}
+          >
+            Salir
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

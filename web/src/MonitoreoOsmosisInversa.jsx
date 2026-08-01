@@ -213,7 +213,9 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
   const [toast, setToast] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [refrescando, setRefrescando] = useState(false);
+  const [guardado, setGuardado] = useState({}); // `${dia}:${paramId}` -> 'guardando' | 'ok' | 'error'
   const timersRef = useRef({});
+  const avisoTimersRef = useRef({});
 
   const tol = Number(periodo.tolerancia) || 10;
   const dias = Number(periodo.dias) || 31;
@@ -222,6 +224,43 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     setToast({ tipo, msg });
     setTimeout(() => setToast(null), 3200);
   }
+
+  // El "guardado ✓" se borra solo a los dos segundos: sirve como acuse de
+  // recibo, pero dejarlo fijo llenaría la pantalla de tildes verdes. El
+  // 'error' se queda hasta que el reintento funcione — es justo el estado
+  // que no se puede dejar pasar de largo.
+  function marcarGuardado(key, estado) {
+    clearTimeout(avisoTimersRef.current[key]);
+    setGuardado((prev) => {
+      if (estado === null) {
+        const nuevo = { ...prev };
+        delete nuevo[key];
+        return nuevo;
+      }
+      return { ...prev, [key]: estado };
+    });
+    if (estado === 'ok') {
+      avisoTimersRef.current[key] = setTimeout(() => {
+        setGuardado((prev) => {
+          const nuevo = { ...prev };
+          delete nuevo[key];
+          return nuevo;
+        });
+      }, 2000);
+    }
+  }
+
+  // Los debounces y los timers del acuse quedarían corriendo contra un
+  // componente ya desmontado si se cambia de período con algo a medio
+  // guardar.
+  useEffect(() => {
+    const debounces = timersRef.current;
+    const avisos = avisoTimersRef.current;
+    return () => {
+      Object.values(debounces).forEach(clearTimeout);
+      Object.values(avisos).forEach(clearTimeout);
+    };
+  }, []);
 
   const cargarMediciones = useCallback(
     async (silencioso) => {
@@ -258,8 +297,11 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
   }, [cargarMediciones]);
 
   async function guardarCelda(dia, paramId, valorRaw) {
+    const key = `${dia}:${paramId}`;
     try {
       const vacio = valorRaw === "" || valorRaw === undefined || valorRaw === null;
+
+      marcarGuardado(key, "guardando");
 
       if (vacio) {
         const { error } = await supabase
@@ -274,11 +316,17 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
           delete dia_[paramId];
           return { ...prev, [dia]: dia_ };
         });
+        marcarGuardado(key, "ok");
         return;
       }
 
       const valorStr = String(valorRaw).replace(",", ".").trim();
-      if (!valorStr || Number.isNaN(Number(valorStr))) return; // ya se marca "invalid" en pantalla
+      if (!valorStr || Number.isNaN(Number(valorStr))) {
+        // No es un guardado fallido sino un valor que todavía no es un
+        // número; la celda ya lo señala como "invalid" por su cuenta.
+        marcarGuardado(key, null);
+        return;
+      }
 
       const { data, error } = await supabase
         .from("mediciones")
@@ -294,10 +342,12 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
         ...prev,
         [dia]: { ...(prev[dia] || {}), [paramId]: { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre } },
       }));
+      marcarGuardado(key, "ok");
     } catch (e) {
       const msg = /mediciones_valor_check/.test(e.message || "")
         ? "Valor fuera de rango permitido"
         : e.message || "No se pudo guardar el valor";
+      marcarGuardado(key, "error");
       mostrarToast("error", msg);
     }
   }
@@ -624,6 +674,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                   const fueraVisible = esAlerta(ev.status) && !confirmados[`${diaActual}:${p.id}`];
                   const dueño = (duenos[diaActual] || {})[p.id];
                   const soloLectura = !!dueño && usuario.rol === "operario" && dueño.usuario_id !== usuario.id;
+                  const estadoGuardado = guardado[`${diaActual}:${p.id}`];
                   return (
                     <div key={p.id} className="rounded-lg p-3 bg-white" style={{ border: `1px solid ${ev.status === "sin" ? "#e2e8f0" : STATUS_COLOR[ev.status] + "55"}` }}>
                       <div className="flex items-center justify-between mb-1.5">
@@ -652,6 +703,30 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                       </div>
                       {ev.status === "invalid" && (
                         <p className="text-xs mt-2 font-medium" style={{ color: "#dc2626" }}>Ingresa un número.</p>
+                      )}
+                      {estadoGuardado === "guardando" && (
+                        <p className="text-xs mt-2 flex items-center gap-1.5" style={{ color: "#94a3b8" }}>
+                          <RefreshCw size={12} className="animate-spin" /> Guardando…
+                        </p>
+                      )}
+                      {estadoGuardado === "ok" && (
+                        <p className="text-xs mt-2 flex items-center gap-1.5" style={{ color: "#16a34a" }}>
+                          <CheckCircle2 size={12} /> Guardado
+                        </p>
+                      )}
+                      {estadoGuardado === "error" && (
+                        <div className="text-xs mt-2 flex items-center gap-2" style={{ color: "#dc2626" }}>
+                          <span className="flex items-center gap-1.5 font-semibold">
+                            <AlertTriangle size={12} /> No se guardó
+                          </span>
+                          <button
+                            onClick={() => guardarCelda(diaActual, p.id, raw)}
+                            className="rounded px-2 py-0.5 font-semibold text-white"
+                            style={{ background: "#dc2626" }}
+                          >
+                            Reintentar
+                          </button>
+                        </div>
                       )}
                       {soloLectura && (
                         <p className="text-xs mt-2" style={{ color: "#94a3b8" }}>Cargado por {dueño.usuario_nombre}. Solo esa persona puede editarlo.</p>
