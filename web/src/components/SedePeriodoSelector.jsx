@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Droplets, ChevronRight } from 'lucide-react';
+import { Droplets, ChevronRight, Pencil, Trash2, Check, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -8,13 +8,17 @@ function diasEnMes(mesIdx, anio) {
   return new Date(anio, mesIdx + 1, 0).getDate();
 }
 
-export default function SedePeriodoSelector({ onSeleccion }) {
+export default function SedePeriodoSelector({ usuario, onSeleccion }) {
+  const puedeAdministrar = usuario.rol === 'super' || usuario.rol === 'admin';
   const [sedes, setSedes] = useState([]);
   const [cargandoSedes, setCargandoSedes] = useState(true);
   const [sedeId, setSedeId] = useState(null);
   const [periodos, setPeriodos] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
+  const [editandoId, setEditandoId] = useState(null);
+  const [toleranciaEdit, setToleranciaEdit] = useState(10);
+  const [diasEdit, setDiasEdit] = useState(31);
   const hoy = new Date();
   const [mesIdx, setMesIdx] = useState(hoy.getMonth());
   const [anio, setAnio] = useState(hoy.getFullYear());
@@ -79,6 +83,36 @@ export default function SedePeriodoSelector({ onSeleccion }) {
     onSeleccion(sedes.find((s) => s.id === sedeId), data);
   }
 
+  // Solo 'dias' y 'tolerancia' son editables: la migración 0001 bloquea
+  // con un trigger cualquier intento de cambiarle el mes, el año o la
+  // sede a un período ya creado.
+  async function guardarPeriodo(id) {
+    setError('');
+    const { error: err } = await supabase
+      .from('periodos')
+      .update({ tolerancia: toleranciaEdit, dias: diasEdit })
+      .eq('id', id);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setEditandoId(null);
+    cargarPeriodos();
+  }
+
+  // La base rechaza el borrado si el período ya tiene mediciones, con un
+  // mensaje que dice cuántas; se muestra tal cual.
+  async function borrarPeriodo(p) {
+    if (!window.confirm(`¿Borrar el período ${MESES[p.mes - 1]} ${p.anio}?`)) return;
+    setError('');
+    const { error: err } = await supabase.from('periodos').delete().eq('id', p.id);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    cargarPeriodos();
+  }
+
   if (cargandoSedes) {
     return <p className="text-sm p-6" style={{ color: '#94a3b8' }}>Cargando…</p>;
   }
@@ -127,18 +161,75 @@ export default function SedePeriodoSelector({ onSeleccion }) {
         ) : periodos.length === 0 ? (
           <p className="text-sm mb-4" style={{ color: '#94a3b8' }}>Aún no hay períodos para esta sede.</p>
         ) : (
-          <div className="flex flex-wrap gap-2 mb-6">
+          <ul className="divide-y mb-6" style={{ borderColor: '#f1f5f9' }}>
             {periodos.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => onSeleccion(sedes.find((s) => s.id === sedeId), p)}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold"
-                style={{ background: '#f1f5f9', color: '#334155' }}
-              >
-                {MESES[p.mes - 1]} {p.anio} <ChevronRight size={14} />
-              </button>
+              <li key={p.id} className="py-2">
+                {editandoId === p.id ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold">{MESES[p.mes - 1]} {p.anio}</span>
+                    <label className="text-xs" style={{ color: '#64748b' }}>
+                      Días
+                      <input
+                        type="number"
+                        min={28}
+                        max={31}
+                        value={diasEdit}
+                        onChange={(e) => setDiasEdit(Number(e.target.value))}
+                        className="ml-1.5 w-16 rounded-lg px-2 py-1 text-sm"
+                        style={{ border: '1.5px solid #cbd5e1' }}
+                      />
+                    </label>
+                    <label className="text-xs" style={{ color: '#64748b' }}>
+                      Tolerancia %
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={toleranciaEdit}
+                        onChange={(e) => setToleranciaEdit(Number(e.target.value))}
+                        className="ml-1.5 w-16 rounded-lg px-2 py-1 text-sm"
+                        style={{ border: '1.5px solid #cbd5e1' }}
+                      />
+                    </label>
+                    <button onClick={() => guardarPeriodo(p.id)} title="Guardar" className="rounded-lg p-1.5" style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                      <Check size={15} />
+                    </button>
+                    <button onClick={() => setEditandoId(null)} title="Cancelar" className="rounded-lg p-1.5" style={{ background: '#f8fafc', color: '#64748b' }}>
+                      <X size={15} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => onSeleccion(sedes.find((s) => s.id === sedeId), p)}
+                      className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold"
+                      style={{ background: '#f1f5f9', color: '#334155' }}
+                    >
+                      {MESES[p.mes - 1]} {p.anio} <ChevronRight size={14} />
+                    </button>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs mr-1" style={{ color: '#94a3b8' }}>{p.dias} días · ±{p.tolerancia}%</span>
+                      {puedeAdministrar && (
+                        <>
+                          <button
+                            onClick={() => { setEditandoId(p.id); setToleranciaEdit(p.tolerancia); setDiasEdit(p.dias); }}
+                            title="Editar días y tolerancia"
+                            className="rounded-lg p-1.5"
+                            style={{ background: '#f8fafc', color: '#64748b' }}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button onClick={() => borrarPeriodo(p)} title="Borrar período" className="rounded-lg p-1.5" style={{ background: '#f8fafc', color: '#dc2626' }}>
+                            <Trash2 size={15} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </li>
             ))}
-          </div>
+          </ul>
         )}
 
         <h2 className="text-sm font-bold mb-2">Crear nuevo período</h2>

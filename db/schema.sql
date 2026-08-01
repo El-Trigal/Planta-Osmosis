@@ -2,6 +2,17 @@
 -- Monitoreo Ósmosis Inversa — Esquema PostgreSQL (Supabase-nativo)
 -- La autenticación la gestiona Supabase Auth (auth.users); usuarios.id
 -- referencia directamente ese id, no hay password_hash propio.
+--
+-- ESTE ARCHIVO ES LA LÍNEA BASE, NO UNA MIGRACIÓN.
+-- Describe el estado inicial del esquema y es idempotente: correrlo sobre
+-- un proyecto que ya tiene estas tablas no hace nada y, sobre todo, NO
+-- BORRA DATOS. Todo cambio posterior al esquema va como archivo nuevo y
+-- numerado en db/migrations/, que se corren en orden una sola vez cada uno.
+--
+-- Ojo con la contracara de ser idempotente: como usa CREATE TABLE IF NOT
+-- EXISTS, si una tabla ya existe se salta entera — incluidas las columnas
+-- que le falten. Por eso este archivo sirve para levantar un proyecto
+-- desde cero, y db/migrations/ para evolucionar uno que ya está vivo.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -12,18 +23,10 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
--- Rebuild limpio: no hay datos reales todavía en el proyecto.
-DROP TABLE IF EXISTS mediciones CASCADE;
-DROP TABLE IF EXISTS periodos CASCADE;
-DROP TABLE IF EXISTS usuario_sedes CASCADE;
-DROP TABLE IF EXISTS usuarios CASCADE;
-DROP TABLE IF EXISTS sedes CASCADE;
-DROP TABLE IF EXISTS empresas CASCADE;
-
 -- ---------------------------------------------------------------------
 -- Empresas
 -- ---------------------------------------------------------------------
-CREATE TABLE empresas (
+CREATE TABLE IF NOT EXISTS empresas (
     id        SERIAL PRIMARY KEY,
     nombre    VARCHAR(120) NOT NULL CHECK (btrim(nombre) <> ''),
     creado_en TIMESTAMP    NOT NULL DEFAULT now()
@@ -32,7 +35,7 @@ CREATE TABLE empresas (
 -- ---------------------------------------------------------------------
 -- Sedes (plantas) — cada empresa puede tener varias
 -- ---------------------------------------------------------------------
-CREATE TABLE sedes (
+CREATE TABLE IF NOT EXISTS sedes (
     id         SERIAL PRIMARY KEY,
     empresa_id INTEGER      NOT NULL REFERENCES empresas (id) ON DELETE CASCADE,
     nombre     VARCHAR(120) NOT NULL CHECK (btrim(nombre) <> ''),
@@ -43,7 +46,7 @@ CREATE TABLE sedes (
 -- Usuarios (perfil de autorización; las credenciales viven en auth.users)
 -- empresa_id es NULL únicamente para el rol 'super'
 -- ---------------------------------------------------------------------
-CREATE TABLE usuarios (
+CREATE TABLE IF NOT EXISTS usuarios (
     id            UUID          PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
     empresa_id    INTEGER       REFERENCES empresas (id) ON DELETE SET NULL,
     nombre        VARCHAR(120)  NOT NULL CHECK (btrim(nombre) <> ''),
@@ -61,7 +64,7 @@ CREATE TABLE usuarios (
 -- Sedes accesibles por cada usuario (operario / admin)
 -- El super no necesita filas aquí; ve todo.
 -- ---------------------------------------------------------------------
-CREATE TABLE usuario_sedes (
+CREATE TABLE IF NOT EXISTS usuario_sedes (
     usuario_id UUID    NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
     sede_id    INTEGER NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
     PRIMARY KEY (usuario_id, sede_id)
@@ -71,7 +74,7 @@ CREATE TABLE usuario_sedes (
 -- Períodos mensuales por sede
 -- UNIQUE(sede_id, mes, anio) impide duplicar el mismo mes
 -- ---------------------------------------------------------------------
-CREATE TABLE periodos (
+CREATE TABLE IF NOT EXISTS periodos (
     id         SERIAL    PRIMARY KEY,
     sede_id    INTEGER   NOT NULL REFERENCES sedes (id) ON DELETE CASCADE,
     mes        SMALLINT  NOT NULL CHECK (mes BETWEEN 1 AND 12),
@@ -87,7 +90,7 @@ CREATE TABLE periodos (
 -- usuario_id = dueño de la celda (quien la cargó por última vez)
 -- UNIQUE(periodo_id, dia, param_id) garantiza una sola celda por combo
 -- ---------------------------------------------------------------------
-CREATE TABLE mediciones (
+CREATE TABLE IF NOT EXISTS mediciones (
     id             SERIAL        PRIMARY KEY,
     periodo_id     INTEGER       NOT NULL REFERENCES periodos (id) ON DELETE CASCADE,
     dia            SMALLINT      NOT NULL CHECK (dia BETWEEN 1 AND 31),
@@ -143,7 +146,8 @@ CREATE TRIGGER trg_20_validar_dia
 -- =====================================================================
 -- Las políticas de Row Level Security, funciones helper y el trigger de
 -- columnas protegidas viven en db/rls.sql — correr ese archivo después
--- de este. El primer usuario 'super' se crea vía la Auth Admin API
+-- de este. Después de rls.sql van, en orden numérico, los archivos de
+-- db/migrations/. El primer usuario 'super' se crea vía la Auth Admin API
 -- (ver README.md), no con un INSERT directo, porque Supabase Auth debe
 -- conocer sus credenciales.
 -- =====================================================================

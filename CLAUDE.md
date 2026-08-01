@@ -18,8 +18,9 @@ There is no lint or test script in this project.
 
 Database changes (schema + RLS) are applied by running the SQL directly against the Supabase project's Postgres instance — via the SQL Editor in the Supabase dashboard, or via the Management API's `database/query` endpoint (`POST https://api.supabase.com/v1/projects/{ref}/database/query` with a Personal Access Token), in this order:
 
-1. `db/schema.sql` — tables, constraints, triggers (does a full `DROP ... CASCADE` + recreate; not an incremental migration file)
+1. `db/schema.sql` — tables, constraints, triggers. This is the **baseline for a fresh project**, not a migration: it is idempotent (`CREATE TABLE IF NOT EXISTS`) and no longer drops anything. Because it skips tables that already exist, it will not add missing columns to a live project.
 2. `db/rls.sql` — helper functions, column-protection triggers, RLS policies, grants
+3. `db/migrations/*.sql` — every schema change after the baseline, applied **in ascending numeric order, once each**. See `db/migrations/README.md`. Never edit a migration that has already been applied in production; fix it with a new one.
 
 Deploying the Edge Function:
 
@@ -42,6 +43,7 @@ Key building blocks in `db/rls.sql`:
 - `puede_ver_sede(sede_id)` / `puede_ver_periodo(periodo_id)` — the shared 3-way (super/admin/operario) access-check reused across `sedes`, `periodos`, and `mediciones` policies.
 - Column-protection triggers (`mediciones_proteger_columnas`, `usuarios_proteger_columnas`) — RLS policies only filter which *rows* are writable, not which *columns* within an otherwise-allowed row. These triggers separately pin `mediciones.usuario_id/periodo_id/dia/param_id` back to their original values on UPDATE, and block changes to `usuarios.rol/empresa_id/email` unless the writer is `service_role`. Without them, e.g. an admin's legitimate `UPDATE` on a measurement could silently reassign its ownership.
 - `usuarios` and `usuario_sedes` have **no client-facing INSERT/UPDATE policies at all** (SELECT only) — every write to those two tables goes through the Edge Function instead.
+- Delete guards (`empresas_guardar_borrado`, `sedes_guardar_borrado`, `periodos_guardar_borrado`, added in `db/migrations/0001`) — the FKs in `schema.sql` are `ON DELETE CASCADE`, so without these `BEFORE DELETE` triggers deleting one empresa would silently take its sedes, periodos and every medición with it. Each raises a Spanish exception naming what still depends on the row; the frontend surfaces `error.message` verbatim, so those strings are user-facing copy.
 
 ### Edge Function `gestionar-usuario`
 
@@ -59,7 +61,9 @@ Everything else — `empresas`, `sedes`, `periodos`, and `mediciones` CRUD — g
 
 ### Frontend flow
 
-`App.jsx` owns the Supabase auth session (via `onAuthStateChange`) and the logged-in user's profile row; it gates between `Login.jsx` (no session), a deactivated-account screen (`perfil.activo === false`), `AdminPanel.jsx` (empresas/sedes/usuarios management, super/admin only), and the main flow: `SedePeriodoSelector.jsx` (pick or create a sede + monthly período) → `MonitoreoOsmosisInversa.jsx` (the actual day/stage capture grid, consolidated table, and summary/charts for that período).
+`App.jsx` owns the Supabase auth session (via `onAuthStateChange`) and the logged-in user's profile row; it gates between `Login.jsx` (no session), `NuevaPassword.jsx` (the `PASSWORD_RECOVERY` event), a deactivated-account screen (`perfil.activo === false`), `AdminPanel.jsx` (empresas/sedes/usuarios management, super/admin only), and the main flow: `SedePeriodoSelector.jsx` (pick or create a sede + monthly período) → `MonitoreoOsmosisInversa.jsx` (the actual day/stage capture grid, consolidated table, and summary/charts for that período).
+
+Password recovery has two independent paths, because the self-service one depends on project configuration that may not be set up: `Login.jsx` → `resetPasswordForEmail` (needs the Pages URL registered under **Authentication → URL Configuration → Redirect URLs**, and realistically a custom SMTP provider — Supabase's built-in mailer is rate-limited to a handful of messages per hour), and an admin resetting the password directly from `AdminPanel.jsx` through the Edge Function, which always works. The `PASSWORD_RECOVERY` gate deliberately sits *above* the profile and `activo` checks in `App.jsx`, so a broken profile load can't trap someone on the recovery link.
 
 ### Deployment
 

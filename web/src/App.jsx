@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import SedePeriodoSelector from './components/SedePeriodoSelector';
+import NuevaPassword from './components/NuevaPassword';
 import MonitoreoOsmosisInversa from './MonitoreoOsmosisInversa';
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
   const [vista, setVista] = useState('monitoreo'); // 'monitoreo' | 'admin'
   const [sede, setSede] = useState(null);
   const [periodo, setPeriodo] = useState(null);
+  const [recuperando, setRecuperando] = useState(false);
 
   const cargarPerfil = useCallback(async (uid) => {
     const { data, error } = await supabase.from('usuarios').select('*').eq('id', uid).single();
@@ -20,8 +22,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((evento, newSession) => {
       setSession(newSession);
+      // Al abrir el enlace de "olvidé mi contraseña", Supabase canjea el
+      // token y deja una sesión válida. Sin este corte la app entraría
+      // derecho al monitoreo y el usuario nunca llegaría a fijar su nueva
+      // clave, quedando con la vieja (que no recuerda) para el próximo
+      // ingreso.
+      if (evento === 'PASSWORD_RECOVERY') setRecuperando(true);
       if (newSession) {
         cargarPerfil(newSession.user.id).finally(() => setCargando(false));
       } else {
@@ -29,6 +37,7 @@ export default function App() {
         setSede(null);
         setPeriodo(null);
         setVista('monitoreo');
+        setRecuperando(false);
         setCargando(false);
       }
     });
@@ -46,6 +55,11 @@ export default function App() {
       </div>
     );
   }
+
+  // Va antes del gate de perfil a propósito: quien llega por el enlace de
+  // recuperación tiene que poder fijar su contraseña aunque su perfil no
+  // cargue o su cuenta esté desactivada.
+  if (session && recuperando) return <NuevaPassword onListo={() => setRecuperando(false)} />;
 
   if (!session || !perfil) return <Login />;
 
@@ -108,6 +122,7 @@ export default function App() {
         <AdminPanel usuario={perfil} />
       ) : !periodo ? (
         <SedePeriodoSelector
+          usuario={perfil}
           onSeleccion={(s, p) => {
             setSede(s);
             setPeriodo(p);

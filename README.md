@@ -17,8 +17,9 @@ Stack 100% Supabase + GitHub Pages: no hay servidor propio que mantener.
 ## Estructura de archivos
 
 ```
-db/schema.sql                              → Tablas, constraints y triggers
+db/schema.sql                              → Tablas, constraints y triggers (línea base, idempotente)
 db/rls.sql                                 → Funciones helper y políticas RLS (correr después de schema.sql)
+db/migrations/                             → Cambios de esquema posteriores, en orden numérico
 supabase/functions/gestionar-usuario/      → Edge Function (crear/editar usuarios)
 web/                                       → Proyecto Vite/React
 .github/workflows/deploy.yml               → Build + deploy a GitHub Pages en cada push a main
@@ -29,7 +30,16 @@ web/                                       → Proyecto Vite/React
 ## Paso 1 — Crear el proyecto en Supabase
 
 1. Crear un proyecto en [supabase.com](https://supabase.com) (anota la contraseña de la base al crearlo).
-2. En el **SQL Editor**: pegar y correr `db/schema.sql`, y luego `db/rls.sql`, en ese orden.
+2. En el **SQL Editor**, pegar y correr en este orden:
+   1. `db/schema.sql`
+   2. `db/rls.sql`
+   3. cada archivo de `db/migrations/`, en orden numérico ascendente
+
+Un proyecto que **ya está en uso** solo necesita el paso 2.iii: `schema.sql` es la
+línea base de un proyecto nuevo y no modifica tablas que ya existen. Ver
+[`db/migrations/README.md`](db/migrations/README.md) para las reglas de las
+migraciones — la principal es que una migración ya aplicada no se edita nunca,
+se enmienda con otra nueva.
 
 ---
 
@@ -84,6 +94,24 @@ VALUES ('UUID-COPIADO-DEL-PASO-ANTERIOR', 'Super Admin', 'super@tudominio.com', 
 
 ---
 
+## Paso 6 — Habilitar la recuperación de contraseña (opcional)
+
+La pantalla de **"¿Olvidaste tu contraseña?"** manda un enlace por correo. Para
+que funcione hacen falta dos cosas en el dashboard de Supabase:
+
+1. **Authentication → URL Configuration → Redirect URLs**: agregar la URL del
+   sitio (`https://<organización>.github.io/Planta-Osmosis/`). Si no está en esa
+   lista, Supabase ignora el `redirectTo` y el enlace no vuelve a la app.
+2. **Project Settings → Authentication → SMTP Settings**: configurar un
+   proveedor propio. El mailer que trae Supabase por defecto solo sirve para
+   probar — permite unos pocos correos por hora y no garantiza entrega.
+
+Aunque no configures nada de esto, nadie queda bloqueado: un `admin` o `super`
+puede restablecerle la contraseña a cualquiera desde **Panel de administración →
+Usuarios → editar**, sin correo de por medio.
+
+---
+
 ## Desarrollo local
 
 ```bash
@@ -100,9 +128,15 @@ Abre `http://localhost:5173`. Habla directo contra el proyecto Supabase configur
 
 | Rol | Puede hacer |
 |-----|------------|
-| `super` | Crear empresas, crear/activar administradores de cualquier empresa |
-| `admin` | Crear sedes y operarios en su empresa; editar cualquier celda de su empresa |
-| `operario` | Ver todas las mediciones del período; crear/editar/borrar solo sus propias celdas |
+| `super` | Todo lo del `admin`, en cualquier empresa; además crear, renombrar y borrar empresas |
+| `admin` | Crear/renombrar/borrar sedes de su empresa; crear, editar, desactivar y resetear la contraseña de sus usuarios; ajustar días y tolerancia de un período; editar cualquier celda de su empresa |
+| `operario` | Ver todas las mediciones del período y crear períodos en sus sedes; crear/editar/borrar solo sus propias celdas |
+
+Qué se puede borrar y qué no: una empresa solo se borra si ya no tiene sedes ni
+usuarios, una sede solo si no tiene períodos, y un período solo si todavía no
+tiene ninguna medición cargada. Es decir, la aplicación deja deshacer un error
+reciente pero nunca borrar historial de planta; para dejar de usar algo que ya
+tiene datos, desactiva a sus usuarios en vez de borrarlo.
 
 ---
 
