@@ -35,3 +35,4 @@ Un proyecto que ya está vivo solo necesita las migraciones que le falten.
 | Archivo | Qué hace |
 |---------|----------|
 | `0001_correcciones_y_borrado.sql` | Permite renombrar empresas y sedes, ajustar días/tolerancia de un período y borrar lo que todavía no tiene historial. Agrega triggers de columna protegida y guardas de borrado para que ningún `DELETE` se lleve datos en cascada en silencio. |
+| `0002_parametros_por_sede.sql` | Saca los 17 parámetros de estar quemados en el código: cada sede define los suyos (`sede_etapas`/`sede_parametros`) y cada período conserva congelada la copia que regía al crearlo (`periodo_etapas`/`periodo_parametros`). Migra `mediciones.param_id` a `parametro_id`. **Aborta sin cambiar nada si alguna medición existente no logra mapearse**, así que si falla no hay que deshacer nada: se corrige la causa y se vuelve a correr. |

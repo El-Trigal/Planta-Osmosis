@@ -124,6 +124,35 @@ Abre `http://localhost:5173`. Habla directo contra el proyecto Supabase configur
 
 ---
 
+## Parámetros de cada planta
+
+Las etapas del proceso y sus rangos de referencia **se definen por sede**, en
+**Panel de administración → Parámetros**. Una sede nueva arranca con las 5
+etapas y 17 parámetros del proceso original (pretratamiento, aireación,
+pre-filtro, pos-filtro y producto), y desde ahí se agregan, se quitan o se
+ajustan según la planta.
+
+Hay dos niveles, y la diferencia importa:
+
+- **Plantilla de la sede** — la configuración vigente. Es lo que se copia al
+  crear un período nuevo.
+- **Período** — al crearse, se queda con una copia propia de esos rangos y no
+  vuelve a cambiar. Por eso corregir hoy un objetivo no altera el cumplimiento
+  ya reportado de meses anteriores: marzo se sigue evaluando con los rangos que
+  regían en marzo.
+
+Si un rango estaba mal cargado desde el principio y hay que corregirlo de
+verdad, se puede editar el período directamente (mismo panel, eligiéndolo en el
+segundo selector); ahí sí cambia cómo se evalúan las mediciones de ese mes, y la
+pantalla lo advierte.
+
+El campo **"agrupa como"** de cada parámetro es lo que permite comparar el mismo
+ensayo a lo largo del proceso en la gráfica de tendencia: todos los parámetros
+que compartan ese valor (`ce`, `ph`, `cl`…) se dibujan superpuestos, una línea
+por etapa.
+
+---
+
 ## Roles y permisos
 
 | Rol | Puede hacer |

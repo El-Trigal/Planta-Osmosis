@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Building2, MapPin, Users, Plus, Pencil, Trash2, Check, X, KeyRound } from 'lucide-react';
+import { Building2, MapPin, Users, Plus, Pencil, Trash2, Check, X, KeyRound, SlidersHorizontal } from 'lucide-react';
 import { supabase, invocarGestionUsuario } from '../lib/supabase';
+import ParametrosPanel from './ParametrosPanel';
 
 const inputStyle = { border: '1.5px solid #cbd5e1', outline: 'none' };
 
@@ -101,6 +102,7 @@ export default function AdminPanel({ usuario }) {
       <div className="flex flex-wrap gap-2 mb-5">
         {esSuper && <Tab activa={tab === 'empresas'} onClick={() => setTab('empresas')} Icon={Building2}>Empresas</Tab>}
         <Tab activa={tab === 'sedes'} onClick={() => setTab('sedes')} Icon={MapPin}>Sedes</Tab>
+        <Tab activa={tab === 'parametros'} onClick={() => setTab('parametros')} Icon={SlidersHorizontal}>Parámetros</Tab>
         <Tab activa={tab === 'usuarios'} onClick={() => setTab('usuarios')} Icon={Users}>Usuarios</Tab>
       </div>
 
@@ -127,6 +129,9 @@ export default function AdminPanel({ usuario }) {
           onError={reportarError}
           onAviso={reportarAviso}
         />
+      )}
+      {tab === 'parametros' && (
+        <ParametrosPanel sedes={sedes} onError={reportarError} onAviso={reportarAviso} />
       )}
       {tab === 'usuarios' && (
         <UsuariosTab

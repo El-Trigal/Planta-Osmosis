@@ -29,80 +29,34 @@ import { supabase } from "./lib/supabase";
 
 /* ───────────────────────────── MODELO DE DATOS ───────────────────────────── */
 
-const ETAPAS = [
-  {
-    id: "pretratamiento",
-    nombre: "Pretratamiento",
-    icon: "Beaker",
-    color: "#0369a1",
-    params: [
-      { id: "pre_ce", label: "Conductividad (Ce)", unidad: "mS/cm", ref: { type: "target", value: 0.8 } },
-      { id: "pre_ph", label: "pH", unidad: "", ref: { type: "min", value: 8 } },
-      { id: "pre_cl", label: "Cl-Libre", unidad: "ppm", ref: { type: "target", value: 0.5 } },
-      { id: "pre_al", label: "Aluminio", unidad: "ppm", ref: { type: "min", value: 0.2 } },
-    ],
-  },
-  {
-    id: "aireacion",
-    nombre: "Tanque de Aireación",
-    icon: "Wind",
-    color: "#0891b2",
-    params: [
-      { id: "air_ce", label: "Conductividad (Ce)", unidad: "mS/cm", ref: { type: "target", value: 0.1 } },
-      { id: "air_ph", label: "pH", unidad: "", ref: { type: "range", min: 6, max: 6.6 } },
-      { id: "air_cl", label: "Cl-Libre", unidad: "ppm", ref: { type: "target", value: 0.1 } },
-    ],
-  },
-  {
-    id: "prefiltro",
-    nombre: "Pre-filtro",
-    icon: "Filter",
-    color: "#0d9488",
-    params: [
-      { id: "prf_ce", label: "Conductividad (Ce)", unidad: "mS/cm", ref: { type: "target", value: 1.1 } },
-      { id: "prf_ph", label: "pH", unidad: "", ref: { type: "range", min: 6, max: 6.7 } },
-      { id: "prf_cl", label: "Cl-Libre", unidad: "ppm", ref: { type: "target", value: 1.1 } },
-    ],
-  },
-  {
-    id: "posfiltro",
-    nombre: "Pos-filtro",
-    icon: "Filter",
-    color: "#16a34a",
-    params: [
-      { id: "pof_ce", label: "Conductividad (Ce)", unidad: "mS/cm", ref: { type: "target", value: 1.1 } },
-      { id: "pof_ph", label: "pH", unidad: "", ref: { type: "target", value: 6.7 } },
-      { id: "pof_cl", label: "Cl-Libre", unidad: "ppm", ref: { type: "target", value: 0 } },
-    ],
-  },
-  {
-    id: "producto",
-    nombre: "Producto",
-    icon: "FlaskConical",
-    color: "#2563eb",
-    params: [
-      { id: "prd_ce", label: "Conductividad (Ce)", unidad: "mS/cm", ref: { type: "range", min: 0.1, max: 0.3 } },
-      { id: "prd_ph", label: "pH", unidad: "", ref: { type: "target", value: 6.7 } },
-      { id: "prd_cl", label: "Cl-Libre", unidad: "ppm", ref: { type: "target", value: 0 } },
-      { id: "prd_caudal", label: "Caudal", unidad: "l/min", ref: { type: "target", value: 35 } },
-    ],
-  },
-];
+// Las etapas y sus parámetros ya no son una constante: cada sede define
+// los suyos, y cada período conserva congelada la copia que regía cuando
+// se creó (ver db/migrations/0002). El componente los recibe cargados
+// desde periodo_etapas / periodo_parametros.
 
-const TODOS_PARAMS = ETAPAS.flatMap((e) => e.params.map((p) => ({ ...p, etapa: e.id, etapaNombre: e.nombre, etapaColor: e.color })));
+const ICON_MAP = { Beaker, Wind, Filter, FlaskConical, Activity };
 
-// Mediciones disponibles para la gráfica. Ce/pH/Cl están en las 5 etapas;
-// Aluminio solo en Pretratamiento y Caudal solo en Producto (una sola línea).
-const MEDICIONES = [
-  { key: "ce", label: "Conductividad (Ce)", unidad: "mS/cm" },
-  { key: "ph", label: "pH", unidad: "" },
-  { key: "cl", label: "Cl-Libre", unidad: "ppm" },
-  { key: "al", label: "Aluminio", unidad: "ppm" },
-  { key: "caudal", label: "Caudal", unidad: "l/min" },
-];
-const paramDeEtapa = (etapa, medKey) => etapa.params.find((p) => p.id.endsWith("_" + medKey));
+// Normaliza una fila de periodo_parametros a la forma que usa el resto
+// del componente. El 'ref' anidado es el mismo contrato que tenía la
+// constante ETAPAS, así que evaluar() y refLabel() no cambian.
+function normalizarParametro(fila) {
+  const num = (v) => (v === null || v === undefined ? null : Number(v));
+  return {
+    id: fila.id,
+    clave: fila.clave,
+    label: fila.label,
+    unidad: fila.unidad || "",
+    medicion: fila.medicion,
+    ref: {
+      type: fila.ref_tipo,
+      value: num(fila.ref_valor),
+      min: num(fila.ref_min),
+      max: num(fila.ref_max),
+    },
+  };
+}
 
-const ICON_MAP = { Beaker, Wind, Filter, FlaskConical };
+const paramDeEtapa = (etapa, medKey) => etapa.params.find((p) => p.medicion === medKey);
 
 /* ───────────────────────────── UTILIDADES ───────────────────────────── */
 
@@ -202,18 +156,19 @@ function Card({ title, value, sub, color, Icon }) {
 /* ───────────────────────────── COMPONENTE PRINCIPAL ───────────────────────────── */
 
 export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCambiarPeriodo }) {
-  const [registros, setRegistros] = useState({}); // { dia: { paramId: rawValue } }
-  const [duenos, setDuenos] = useState({}); // { dia: { paramId: { usuario_id, usuario_nombre } } }
+  const [etapas, setEtapas] = useState([]); // del período, congeladas
+  const [registros, setRegistros] = useState({}); // { dia: { parametroId: rawValue } }
+  const [duenos, setDuenos] = useState({}); // { dia: { parametroId: { usuario_id, usuario_nombre } } }
   const [fase, setFase] = useState(1); // 1 Capturar · 2 Tabla · 3 Resumen
   const [diaActual, setDiaActual] = useState(1);
   const [etapaActual, setEtapaActual] = useState(0);
-  const [confirmados, setConfirmados] = useState({}); // `${dia}:${paramId}` -> true
-  const [medicion, setMedicion] = useState("ce");
-  const [etapasVisibles, setEtapasVisibles] = useState(() => Object.fromEntries(ETAPAS.map((e) => [e.id, true])));
+  const [confirmados, setConfirmados] = useState({}); // `${dia}:${parametroId}` -> true
+  const [medicion, setMedicion] = useState(null);
+  const [etapasVisibles, setEtapasVisibles] = useState({});
   const [toast, setToast] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [refrescando, setRefrescando] = useState(false);
-  const [guardado, setGuardado] = useState({}); // `${dia}:${paramId}` -> 'guardando' | 'ok' | 'error'
+  const [guardado, setGuardado] = useState({}); // `${dia}:${parametroId}` -> 'guardando' | 'ok' | 'error'
   const timersRef = useRef({});
   const avisoTimersRef = useRef({});
 
@@ -262,22 +217,44 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     };
   }, []);
 
+  // Las etapas del período se leen una sola vez: están congeladas, así
+  // que no hay nada que refrescar salvo que un admin las edite, y en ese
+  // caso vuelve a entrar al período.
+  const cargarEtapas = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("periodo_etapas")
+      .select("id, clave, nombre, icono, color, orden, periodo_parametros(id, clave, label, unidad, medicion, ref_tipo, ref_valor, ref_min, ref_max, orden)")
+      .eq("periodo_id", periodo.id)
+      .order("orden");
+    if (error) throw error;
+    return (data || []).map((e) => ({
+      id: e.id,
+      clave: e.clave,
+      nombre: e.nombre,
+      icon: e.icono,
+      color: e.color,
+      params: [...(e.periodo_parametros || [])]
+        .sort((a, b) => a.orden - b.orden || a.id - b.id)
+        .map(normalizarParametro),
+    }));
+  }, [periodo.id]);
+
   const cargarMediciones = useCallback(
     async (silencioso) => {
       if (!silencioso) setRefrescando(true);
       try {
         const { data, error } = await supabase
           .from("mediciones")
-          .select("dia, param_id, valor, usuario_id, usuarios(nombre)")
+          .select("dia, parametro_id, valor, usuario_id, usuarios(nombre)")
           .eq("periodo_id", periodo.id);
         if (error) throw error;
         const regs = {};
         const dus = {};
         for (const row of data || []) {
-          regs[row.dia] = { ...(regs[row.dia] || {}), [row.param_id]: row.valor === null ? "" : row.valor };
+          regs[row.dia] = { ...(regs[row.dia] || {}), [row.parametro_id]: row.valor === null ? "" : row.valor };
           dus[row.dia] = {
             ...(dus[row.dia] || {}),
-            [row.param_id]: { usuario_id: row.usuario_id, usuario_nombre: row.usuarios?.nombre },
+            [row.parametro_id]: { usuario_id: row.usuario_id, usuario_nombre: row.usuarios?.nombre },
           };
         }
         setRegistros(regs);
@@ -285,7 +262,6 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
       } catch (e) {
         mostrarToast("error", e.message || "No se pudieron cargar las mediciones");
       } finally {
-        setCargando(false);
         if (!silencioso) setRefrescando(false);
       }
     },
@@ -293,11 +269,46 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
   );
 
   useEffect(() => {
-    cargarMediciones(true);
-  }, [cargarMediciones]);
+    let vigente = true;
+    (async () => {
+      try {
+        const cargadas = await cargarEtapas();
+        if (!vigente) return;
+        setEtapas(cargadas);
+        setEtapasVisibles(Object.fromEntries(cargadas.map((e) => [e.id, true])));
+        setMedicion(cargadas.flatMap((e) => e.params)[0]?.medicion ?? null);
+      } catch (e) {
+        if (vigente) mostrarToast("error", e.message || "No se pudo cargar la configuración del período");
+      }
+      await cargarMediciones(true);
+      if (vigente) setCargando(false);
+    })();
+    return () => {
+      vigente = false;
+    };
+  }, [cargarEtapas, cargarMediciones]);
 
-  async function guardarCelda(dia, paramId, valorRaw) {
-    const key = `${dia}:${paramId}`;
+  const todosParams = useMemo(
+    () =>
+      etapas.flatMap((e) =>
+        e.params.map((p) => ({ ...p, etapa: e.id, etapaNombre: e.nombre, etapaColor: e.color }))
+      ),
+    [etapas]
+  );
+
+  // Las mediciones comparables entre etapas salen de los propios
+  // parámetros: todos los que comparten 'medicion' son el mismo ensayo en
+  // distintos puntos del proceso, y son los que la gráfica superpone.
+  const medicionesDisponibles = useMemo(() => {
+    const vistas = new Map();
+    for (const p of todosParams) {
+      if (!vistas.has(p.medicion)) vistas.set(p.medicion, { key: p.medicion, label: p.label, unidad: p.unidad });
+    }
+    return [...vistas.values()];
+  }, [todosParams]);
+
+  async function guardarCelda(dia, parametroId, valorRaw) {
+    const key = `${dia}:${parametroId}`;
     try {
       const vacio = valorRaw === "" || valorRaw === undefined || valorRaw === null;
 
@@ -309,11 +320,11 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
           .delete()
           .eq("periodo_id", periodo.id)
           .eq("dia", dia)
-          .eq("param_id", paramId);
+          .eq("parametro_id", parametroId);
         if (error) throw error;
         setDuenos((prev) => {
           const dia_ = { ...(prev[dia] || {}) };
-          delete dia_[paramId];
+          delete dia_[parametroId];
           return { ...prev, [dia]: dia_ };
         });
         marcarGuardado(key, "ok");
@@ -331,8 +342,8 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
       const { data, error } = await supabase
         .from("mediciones")
         .upsert(
-          { periodo_id: periodo.id, dia, param_id: paramId, valor: Number(valorStr), usuario_id: usuario.id },
-          { onConflict: "periodo_id,dia,param_id" }
+          { periodo_id: periodo.id, dia, parametro_id: parametroId, valor: Number(valorStr), usuario_id: usuario.id },
+          { onConflict: "periodo_id,dia,parametro_id" }
         )
         .select("usuario_id, usuarios(nombre)")
         .single();
@@ -340,7 +351,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
       setDuenos((prev) => ({
         ...prev,
-        [dia]: { ...(prev[dia] || {}), [paramId]: { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre } },
+        [dia]: { ...(prev[dia] || {}), [parametroId]: { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre } },
       }));
       marcarGuardado(key, "ok");
     } catch (e) {
@@ -352,31 +363,31 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     }
   }
 
-  function setValor(dia, paramId, valor, { debounced } = {}) {
+  function setValor(dia, parametroId, valor, { debounced } = {}) {
     setRegistros((prev) => {
-      const nuevo = { ...prev, [dia]: { ...(prev[dia] || {}), [paramId]: valor } };
-      if (valor === "") delete nuevo[dia][paramId];
+      const nuevo = { ...prev, [dia]: { ...(prev[dia] || {}), [parametroId]: valor } };
+      if (valor === "") delete nuevo[dia][parametroId];
       return nuevo;
     });
     setConfirmados((prev) => {
       const c = { ...prev };
-      delete c[`${dia}:${paramId}`];
+      delete c[`${dia}:${parametroId}`];
       return c;
     });
 
-    const key = `${dia}:${paramId}`;
+    const key = `${dia}:${parametroId}`;
     clearTimeout(timersRef.current[key]);
     if (debounced) {
-      timersRef.current[key] = setTimeout(() => guardarCelda(dia, paramId, valor), 800);
+      timersRef.current[key] = setTimeout(() => guardarCelda(dia, parametroId, valor), 800);
     } else {
-      guardarCelda(dia, paramId, valor);
+      guardarCelda(dia, parametroId, valor);
     }
   }
 
-  function handleBlur(dia, paramId, valor) {
-    const key = `${dia}:${paramId}`;
+  function handleBlur(dia, parametroId, valor) {
+    const key = `${dia}:${parametroId}`;
     clearTimeout(timersRef.current[key]);
-    guardarCelda(dia, paramId, valor);
+    guardarCelda(dia, parametroId, valor);
   }
 
   /* ── Resumen calculado ── */
@@ -393,7 +404,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
       if (claves.length === 0) continue;
       diasRegistrados++;
       const detalles = [];
-      for (const p of TODOS_PARAMS) {
+      for (const p of todosParams) {
         const ev = evaluar(p, reg[p.id], tol);
         if (ev.status === "sin") continue;
         if (ev.status !== "invalid") celdasEvaluadas++;
@@ -408,7 +419,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
     const cumplimiento = celdasEvaluadas > 0 ? Math.round((celdasOk / celdasEvaluadas) * 100) : 0;
 
-    const promedios = TODOS_PARAMS.map((p) => {
+    const promedios = todosParams.map((p) => {
       const vals = [];
       for (let d = 1; d <= dias; d++) {
         const ev = evaluar(p, (registros[d] || {})[p.id], tol);
@@ -421,11 +432,12 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     });
 
     return { diasRegistrados, diasConAlertas, cumplimiento, promedios, diasFuera, totalDias: dias };
-  }, [registros, dias, tol]);
+  }, [registros, dias, tol, todosParams]);
 
   const chartData = useMemo(() => {
-    const med = MEDICIONES.find((m) => m.key === medicion) || MEDICIONES[0];
-    const series = ETAPAS.map((et) => ({ etapa: et, param: paramDeEtapa(et, med.key) })).filter((s) => s.param);
+    const med = medicionesDisponibles.find((m) => m.key === medicion) || medicionesDisponibles[0];
+    if (!med) return { puntos: [], med: null, series: [], hayDatos: false, totalConDatos: 0, mostrados: 0 };
+    const series = etapas.map((et) => ({ etapa: et, param: paramDeEtapa(et, med.key) })).filter((s) => s.param);
     const mm = String(periodo.mes).padStart(2, "0");
     const conDatos = [];
     for (let d = 1; d <= dias; d++) {
@@ -443,7 +455,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     const MAX = 10;
     const puntos = conDatos.length > MAX ? conDatos.slice(conDatos.length - MAX) : conDatos;
     return { puntos, med, series, hayDatos: conDatos.length > 0, totalConDatos: conDatos.length, mostrados: puntos.length };
-  }, [registros, dias, periodo.mes, periodo.anio, medicion, tol]);
+  }, [registros, dias, periodo.mes, periodo.anio, medicion, tol, etapas, medicionesDisponibles]);
 
   const seriesVisibles = chartData.series.filter((s) => etapasVisibles[s.etapa.id]);
   const refUnica = seriesVisibles.length === 1 ? seriesVisibles[0].param : null;
@@ -483,9 +495,9 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
       aoa.push([]);
 
       const row1 = ["Día"];
-      const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: TODOS_PARAMS.length } }];
+      const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: todosParams.length } }];
       let col = 1;
-      ETAPAS.forEach((et) => {
+      etapas.forEach((et) => {
         row1.push(et.nombre);
         for (let i = 1; i < et.params.length; i++) row1.push("");
         if (et.params.length > 1) merges.push({ s: { r: 2, c: col }, e: { r: 2, c: col + et.params.length - 1 } });
@@ -494,12 +506,12 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
       aoa.push(row1);
 
       const row2 = ["Ref:"];
-      ETAPAS.forEach((et) => et.params.forEach((p) => row2.push(`${p.label}${p.unidad ? " (" + p.unidad + ")" : ""} · ${refLabel(p)}`)));
+      etapas.forEach((et) => et.params.forEach((p) => row2.push(`${p.label}${p.unidad ? " (" + p.unidad + ")" : ""} · ${refLabel(p)}`)));
       aoa.push(row2);
 
       for (let d = 1; d <= dias; d++) {
         const row = [d];
-        ETAPAS.forEach((et) =>
+        etapas.forEach((et) =>
           et.params.forEach((p) => {
             const raw = (registros[d] || {})[p.id];
             if (raw === undefined || String(raw).trim() === "") {
@@ -515,7 +527,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws["!merges"] = merges;
-      ws["!cols"] = [{ wch: 6 }, ...TODOS_PARAMS.map(() => ({ wch: 16 }))];
+      ws["!cols"] = [{ wch: 6 }, ...todosParams.map(() => ({ wch: 16 }))];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Monitoreo");
       XLSX.writeFile(wb, `Monitoreo_OsmosisInversa_${periodo.mes}_${periodo.anio}.xlsx`);
@@ -529,21 +541,25 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     setDiaActual((d) => Math.min(dias, Math.max(1, d + delta)));
   }
   function irEtapa(delta) {
-    setEtapaActual((e) => Math.min(ETAPAS.length - 1, Math.max(0, e + delta)));
+    setEtapaActual((e) => Math.min(etapas.length - 1, Math.max(0, e + delta)));
   }
 
-  const etapa = ETAPAS[etapaActual];
-  const EtapaIcon = ICON_MAP[etapa.icon] || Beaker;
+  // etapas llega vacío mientras carga, y puede seguir vacío si alguien
+  // borró toda la configuración del período; los hooks de abajo tienen que
+  // correr igual, así que se resuelve con un valor nulo y se corta recién
+  // en el render.
+  const etapa = etapas[etapaActual] ?? null;
+  const EtapaIcon = (etapa && ICON_MAP[etapa.icon]) || Beaker;
 
   const alertasDia = useMemo(() => {
     const reg = registros[diaActual] || {};
     const lista = [];
-    for (const p of TODOS_PARAMS) {
+    for (const p of todosParams) {
       const ev = evaluar(p, reg[p.id], tol);
       if (esAlerta(ev.status)) lista.push({ param: p, ...ev });
     }
     return lista;
-  }, [registros, diaActual, tol]);
+  }, [registros, diaActual, tol, todosParams]);
 
   const progresoPct = Math.round((diaActual / dias) * 100);
 
@@ -551,6 +567,15 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     return (
       <div className="flex items-center justify-center py-20 text-sm" style={{ color: "#94a3b8" }}>
         Cargando mediciones…
+      </div>
+    );
+  }
+
+  if (etapas.length === 0) {
+    return (
+      <div className="max-w-md mx-auto text-center py-20 px-4 text-sm" style={{ color: "#64748b" }}>
+        Este período no tiene etapas ni parámetros configurados. Un administrador puede definirlos
+        desde <strong>Panel de administración → Parámetros</strong>.
       </div>
     );
   }
@@ -642,7 +667,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
             {/* Tabs de etapa */}
             <div className="flex flex-wrap gap-1.5 mb-4">
-              {ETAPAS.map((et, i) => {
+              {etapas.map((et, i) => {
                 const Icn = ICON_MAP[et.icon] || Beaker;
                 const activa = i === etapaActual;
                 return (
@@ -661,7 +686,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                 </div>
                 <div>
                   <p className="text-xs font-semibold" style={{ color: "#94a3b8" }}>
-                    Etapa {etapaActual + 1}/{ETAPAS.length}
+                    Etapa {etapaActual + 1}/{etapas.length}
                   </p>
                   <h3 className="text-base font-bold" style={{ color: etapa.color }}>{etapa.nombre}</h3>
                 </div>
@@ -748,7 +773,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                 <button onClick={() => irEtapa(-1)} disabled={etapaActual <= 0} className="flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold" style={navBtnStyle(etapaActual <= 0)}>
                   <ChevronLeft size={16} /> Etapa ant.
                 </button>
-                {etapaActual < ETAPAS.length - 1 ? (
+                {etapaActual < etapas.length - 1 ? (
                   <button onClick={() => irEtapa(1)} className="flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold text-white" style={{ background: etapa.color }}>
                     Etapa sig. <ChevronRight size={16} />
                   </button>
@@ -778,7 +803,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
             <div className="p-5 border-b" style={{ borderColor: "#e2e8f0" }}>
               <h2 className="text-lg font-bold">Tabla consolidada</h2>
               <p className="text-sm" style={{ color: "#64748b" }}>
-                {dias} días × 17 parámetros. <span style={{ color: "#dc2626" }}>■</span> fuera de rango · <span style={{ color: "#f59e0b" }}>■</span> revisar · <span style={{ color: "#94a3b8" }}>■</span> sin dato
+                {dias} días × {todosParams.length} parámetros. <span style={{ color: "#dc2626" }}>■</span> fuera de rango · <span style={{ color: "#f59e0b" }}>■</span> revisar · <span style={{ color: "#94a3b8" }}>■</span> sin dato
               </p>
             </div>
             <div className="overflow-x-auto">
@@ -786,7 +811,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                 <thead>
                   <tr>
                     <th className="sticky left-0 z-10 px-3 py-2 text-left font-bold" style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>Día</th>
-                    {ETAPAS.map((et) => (
+                    {etapas.map((et) => (
                       <th key={et.id} colSpan={et.params.length} className="px-2 py-2 text-center font-bold text-white" style={{ background: et.color, borderRight: "2px solid #fff" }}>
                         {et.nombre}
                       </th>
@@ -794,7 +819,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                   </tr>
                   <tr>
                     <th className="sticky left-0 z-10 px-3 py-2" style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}></th>
-                    {TODOS_PARAMS.map((p) => (
+                    {todosParams.map((p) => (
                       <th key={p.id} className="px-2 py-2 text-center font-semibold whitespace-nowrap" style={{ background: "#f1f5f9", borderBottom: "1px solid #e2e8f0", color: "#475569" }}>
                         {p.label.replace("Conductividad (Ce)", "Ce")}
                         <div className="font-normal" style={{ color: "#94a3b8" }}>{refLabel(p)}</div>
@@ -806,7 +831,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                   {Array.from({ length: dias }, (_, i) => i + 1).map((d) => (
                     <tr key={d}>
                       <td className="sticky left-0 z-10 px-3 py-1.5 font-bold text-center" style={{ background: "#f8fafc", borderBottom: "1px solid #f1f5f9" }}>{d}</td>
-                      {TODOS_PARAMS.map((p) => {
+                      {todosParams.map((p) => {
                         const raw = (registros[d] || {})[p.id] ?? "";
                         const ev = evaluar(p, raw, tol);
                         return (
@@ -875,7 +900,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {MEDICIONES.map((m) => {
+                  {medicionesDisponibles.map((m) => {
                     const activa = medicion === m.key;
                     return (
                       <button key={m.key} onClick={() => setMedicion(m.key)} className="rounded-lg px-3 py-2 text-xs font-semibold transition" style={{ background: activa ? "#0369a1" : "#f1f5f9", color: activa ? "#fff" : "#475569" }}>
@@ -889,7 +914,7 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
 
               {/* Casillas por etapa */}
               <div className="flex flex-wrap gap-2 mb-4">
-                {ETAPAS.map((et) => {
+                {etapas.map((et) => {
                   const tiene = !!paramDeEtapa(et, medicion);
                   const on = etapasVisibles[et.id] && tiene;
                   return (
