@@ -77,19 +77,30 @@ la primera migración de esta serie que toca una columna con datos reales.
 Conviene probarla primero en un proyecto de staging o un branch de Supabase
 si hay uno disponible, no directo en producción.
 
-## Fase 4 — Operación diaria (pendiente)
+## Fase 4 — Operación diaria (en curso)
 
 - **Modo offline / PWA.** Es una app que se usa con el celular junto a la
   máquina; hoy cada tecla depende del wifi. Cache local con cola de reenvío
   para las escrituras, y ese reintento se enchufa naturalmente con el
   indicador de guardado de la Fase 2. Probablemente la mejora de mayor
-  impacto real para quien usa la app día a día.
+  impacto real para quien usa la app día a día. (pendiente)
 - **Respaldos.** El tier gratuito de Supabase no garantiza point-in-time
   recovery y hoy no hay ningún export automático. Un Action semanal que
-  vuelque las tablas a un artifact alcanzaría.
-- **Reemplazar `xlsx@0.18.5`.** Arrastra vulnerabilidades conocidas
+  vuelque las tablas a un artifact alcanzaría. (pendiente)
+- **Reemplazar `xlsx@0.18.5`** ✅ — arrastraba vulnerabilidades conocidas
   (prototype pollution / ReDoS) y la versión parchada de SheetJS no se
-  publica en npm. Migrar a `exceljs` o al tarball oficial de SheetJS.
+  publica en npm. Se migró la exportación de `MonitoreoOsmosisInversa.jsx`
+  a `exceljs` (misma maquetación: título fusionado, cabecera de etapas con
+  merges, fila de referencias, anchos de columna). La generación pasó a ser
+  asíncrona (`workbook.xlsx.writeBuffer()` + descarga vía `Blob`/`<a>`, ya
+  que ExcelJS no tiene un `writeFile` de navegador equivalente a
+  `XLSX.writeFile`). `exceljs@4.4.0` arrastra a su vez `uuid@8.3.2`
+  (`GHSA-w5hq-g745-h8pq`, moderado) — no es explotable en este uso: exceljs
+  solo llama a `uuidv4()` sin el parámetro `buf` que dispara la falla, y no
+  hay una versión de exceljs que rompa esa cadena de dependencias. Sin
+  probar el clic de "Exportar" en la app real (requiere sesión con datos
+  reales); sí se validó que el build de Vite resuelve la build de
+  navegador de exceljs sin polyfills y sin errores de consola.
 
 ## Fase 5 — Cierre (pendiente)
 

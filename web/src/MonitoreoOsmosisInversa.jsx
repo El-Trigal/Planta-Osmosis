@@ -24,7 +24,7 @@ import {
   Activity,
   RefreshCw,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { supabase } from "./lib/supabase";
 
 /* ───────────────────────────── MODELO DE DATOS ───────────────────────────── */
@@ -488,26 +488,29 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
   }
 
   /* ── Exportar a Excel ── */
-  function exportar() {
+  async function exportar() {
     try {
-      const aoa = [];
-      aoa.push([`Monitoreo Ósmosis Inversa — ${sede.empresa_nombre} · ${sede.nombre} · ${periodo.mes}/${periodo.anio}`]);
-      aoa.push([]);
+      const totalCols = todosParams.length + 1;
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Monitoreo");
+
+      ws.addRow([`Monitoreo Ósmosis Inversa — ${sede.empresa_nombre} · ${sede.nombre} · ${periodo.mes}/${periodo.anio}`]);
+      ws.addRow([]);
 
       const row1 = ["Día"];
-      const merges = [{ s: { r: 0, c: 0 }, e: { r: 0, c: todosParams.length } }];
+      const merges = [];
       let col = 1;
       etapas.forEach((et) => {
         row1.push(et.nombre);
         for (let i = 1; i < et.params.length; i++) row1.push("");
-        if (et.params.length > 1) merges.push({ s: { r: 2, c: col }, e: { r: 2, c: col + et.params.length - 1 } });
+        if (et.params.length > 1) merges.push([3, col + 1, 3, col + et.params.length]);
         col += et.params.length;
       });
-      aoa.push(row1);
+      ws.addRow(row1);
 
       const row2 = ["Ref:"];
       etapas.forEach((et) => et.params.forEach((p) => row2.push(`${p.label}${p.unidad ? " (" + p.unidad + ")" : ""} · ${refLabel(p)}`)));
-      aoa.push(row2);
+      ws.addRow(row2);
 
       for (let d = 1; d <= dias; d++) {
         const row = [d];
@@ -522,15 +525,24 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
             }
           })
         );
-        aoa.push(row);
+        ws.addRow(row);
       }
 
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws["!merges"] = merges;
-      ws["!cols"] = [{ wch: 6 }, ...todosParams.map(() => ({ wch: 16 }))];
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Monitoreo");
-      XLSX.writeFile(wb, `Monitoreo_OsmosisInversa_${periodo.mes}_${periodo.anio}.xlsx`);
+      ws.mergeCells(1, 1, 1, totalCols);
+      merges.forEach((m) => ws.mergeCells(...m));
+      ws.getColumn(1).width = 6;
+      for (let i = 0; i < todosParams.length; i++) ws.getColumn(i + 2).width = 16;
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Monitoreo_OsmosisInversa_${periodo.mes}_${periodo.anio}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
       mostrarToast("success", "Excel exportado");
     } catch {
       mostrarToast("error", "No se pudo generar el Excel");
