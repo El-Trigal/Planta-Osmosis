@@ -79,11 +79,41 @@ si hay uno disponible, no directo en producción.
 
 ## Fase 4 — Operación diaria (en curso)
 
-- **Modo offline / PWA.** Es una app que se usa con el celular junto a la
-  máquina; hoy cada tecla depende del wifi. Cache local con cola de reenvío
-  para las escrituras, y ese reintento se enchufa naturalmente con el
-  indicador de guardado de la Fase 2. Probablemente la mejora de mayor
-  impacto real para quien usa la app día a día. (pendiente)
+- **Modo offline / PWA** ✅ (reconexión en caliente) — cubre el caso de
+  "el período ya se cargó con conexión y el wifi se corta a mitad de la
+  captura", que es la queja real de uso en planta. Queda fuera de
+  alcance a propósito: abrir un período ya visitado estando offline
+  desde el arranque (cachear la grilla completa) — se deja para una
+  iteración futura si hace falta.
+  - `web/vite.config.js` agrega `vite-plugin-pwa` (`registerType:
+    'autoUpdate'`, `devOptions.enabled` para poder probarlo con `npm run
+    dev`); no usa `runtimeCaching`, así que las llamadas a Supabase nunca
+    se sirven cacheadas — solo se precachea el shell de la app (JS/CSS/
+    HTML). Íconos placeholder en `web/public/icons/` (cuadrados
+    `#0369a1`, reemplazables por un logo real sin tocar código).
+    `web/src/main.jsx` registra el service worker vía
+    `virtual:pwa-register`.
+  - `web/src/lib/useOnline.js` — hook `navigator.onLine` + eventos
+    `online`/`offline`.
+  - `web/src/lib/colaOffline.js` — cola de escrituras de `mediciones`
+    pendientes en `localStorage` (clave `offline_cola_${periodoId}`,
+    colapsada por celda al último valor, igual que el debounce ya
+    colapsa varias tecleadas en un solo request).
+  - `MonitoreoOsmosisInversa.jsx`: `enviarMedicion()` clasifica cualquier
+    fallo en `red` (transitorio — `status === 0`, la señal que arma
+    postgrest-js cuando el fetch nunca tuvo respuesta) o `rechazo` (real:
+    `mediciones_valor_check`, `PGRST116` por conflicto de dueño, `23503`
+    por FK — período/parámetro borrado). Solo `red` se encola y se
+    reintenta solo; un `rechazo` se muestra como el `error` de siempre,
+    con su botón "Reintentar" manual, y nunca queda encolado. Nuevo
+    estado de celda `'pendiente'` y badge en el encabezado del período
+    ("Sin conexión" / "N cambios por enviar"). Al montar, la cola local
+    se superpone sobre lo cargado del servidor para no perder un valor
+    tipeado si la página se recarga con algo sin enviar.
+  - **Sin probar el flujo real de punta a punta** (escribir → cortar
+    conexión → ver "pendiente" → reconectar → ver que se reenvía solo):
+    requiere loguearse con una sesión real de Supabase, que no se hizo en
+    esta sesión de trabajo. Si algo no cuadra en planta, empezar por acá.
 - **Respaldos.** El tier gratuito de Supabase no garantiza point-in-time
   recovery y hoy no hay ningún export automático. Un Action semanal que
   vuelque las tablas a un artifact alcanzaría. (pendiente)

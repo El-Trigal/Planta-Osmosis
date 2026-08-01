@@ -14,6 +14,7 @@ import {
 import {
   CheckCircle2,
   AlertTriangle,
+  CloudOff,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -26,6 +27,8 @@ import {
 } from "lucide-react";
 import ExcelJS from "exceljs";
 import { supabase } from "./lib/supabase";
+import { useOnline } from "./lib/useOnline";
+import { leerCola, encolar, quitarDeCola } from "./lib/colaOffline";
 
 /* ───────────────────────────── MODELO DE DATOS ───────────────────────────── */
 
@@ -168,9 +171,15 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
   const [toast, setToast] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [refrescando, setRefrescando] = useState(false);
-  const [guardado, setGuardado] = useState({}); // `${dia}:${parametroId}` -> 'guardando' | 'ok' | 'error'
+  const [guardado, setGuardado] = useState({}); // `${dia}:${parametroId}` -> 'guardando' | 'ok' | 'error' | 'pendiente'
   const timersRef = useRef({});
   const avisoTimersRef = useRef({});
+  const vaciandoRef = useRef(false);
+  const online = useOnline();
+  const pendientesCount = useMemo(
+    () => Object.values(guardado).filter((v) => v === "pendiente").length,
+    [guardado]
+  );
 
   const tol = Number(periodo.tolerancia) || 10;
   const dias = Number(periodo.dias) || 31;
@@ -281,12 +290,37 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
         if (vigente) mostrarToast("error", e.message || "No se pudo cargar la configuración del período");
       }
       await cargarMediciones(true);
-      if (vigente) setCargando(false);
+      if (!vigente) return;
+
+      // Lo que haya quedado en la cola local es más reciente que lo que
+      // acaba de devolver el servidor (todavía no llegó a escribirse):
+      // se superpone para no perder el valor tipeado ni el aviso
+      // "pendiente" si la página se recargó con algo sin enviar.
+      const cola = leerCola(periodo.id);
+      const claves = Object.values(cola);
+      if (claves.length > 0) {
+        setRegistros((prev) => {
+          const nuevo = { ...prev };
+          for (const { dia, parametroId, valor } of claves) {
+            nuevo[dia] = { ...(nuevo[dia] || {}) };
+            if (valor === null) delete nuevo[dia][parametroId];
+            else nuevo[dia][parametroId] = valor;
+          }
+          return nuevo;
+        });
+        setGuardado((prev) => {
+          const nuevo = { ...prev };
+          for (const { dia, parametroId } of claves) nuevo[`${dia}:${parametroId}`] = "pendiente";
+          return nuevo;
+        });
+      }
+
+      setCargando(false);
     })();
     return () => {
       vigente = false;
     };
-  }, [cargarEtapas, cargarMediciones]);
+  }, [cargarEtapas, cargarMediciones, periodo.id]);
 
   const todosParams = useMemo(
     () =>
@@ -307,30 +341,60 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
     return [...vistas.values()];
   }, [todosParams]);
 
+  // `status === 0` es la señal que arma postgrest-js cuando el propio
+  // fetch nunca llegó a tener respuesta (sin conexión, DNS caído, etc.) —
+  // no viene de PostgREST, así que es fiable para distinguir "transitorio,
+  // reintentar solo" de un rechazo real del servidor (valor fuera de
+  // rango, conflicto de dueño, o período/parámetro que ya no existe).
+  function clasificarError(error, status) {
+    if (status === 0) return { tipo: "red" };
+    if (/mediciones_valor_check/.test(error.message || "")) {
+      return { tipo: "rechazo", mensaje: "Valor fuera de rango permitido" };
+    }
+    if (error.code === "PGRST116") {
+      return { tipo: "rechazo", mensaje: "Otro usuario ya escribió este valor. Actualizá para ver el valor vigente." };
+    }
+    if (error.code === "23503") {
+      return { tipo: "rechazo", mensaje: "El período o parámetro ya no existe." };
+    }
+    return { tipo: "rechazo", mensaje: error.message || "No se pudo guardar el valor" };
+  }
+
+  // El upsert/delete real, sin manejo de estado — lo usan tanto
+  // guardarCelda (la escritura en vivo) como vaciarCola (el reintento
+  // automático de lo que quedó pendiente offline).
+  async function enviarMedicion(dia, parametroId, valorNum) {
+    if (valorNum === null) {
+      const { error, status } = await supabase
+        .from("mediciones")
+        .delete()
+        .eq("periodo_id", periodo.id)
+        .eq("dia", dia)
+        .eq("parametro_id", parametroId);
+      if (error) throw clasificarError(error, status);
+      return null;
+    }
+
+    const { data, error, status } = await supabase
+      .from("mediciones")
+      .upsert(
+        { periodo_id: periodo.id, dia, parametro_id: parametroId, valor: valorNum, usuario_id: usuario.id },
+        { onConflict: "periodo_id,dia,parametro_id" }
+      )
+      .select("usuario_id, usuarios(nombre)")
+      .single();
+    if (error) throw clasificarError(error, status);
+    return { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre };
+  }
+
   async function guardarCelda(dia, parametroId, valorRaw) {
     const key = `${dia}:${parametroId}`;
-    try {
-      const vacio = valorRaw === "" || valorRaw === undefined || valorRaw === null;
+    const vacio = valorRaw === "" || valorRaw === undefined || valorRaw === null;
 
-      marcarGuardado(key, "guardando");
+    marcarGuardado(key, "guardando");
 
-      if (vacio) {
-        const { error } = await supabase
-          .from("mediciones")
-          .delete()
-          .eq("periodo_id", periodo.id)
-          .eq("dia", dia)
-          .eq("parametro_id", parametroId);
-        if (error) throw error;
-        setDuenos((prev) => {
-          const dia_ = { ...(prev[dia] || {}) };
-          delete dia_[parametroId];
-          return { ...prev, [dia]: dia_ };
-        });
-        marcarGuardado(key, "ok");
-        return;
-      }
-
+    let valorNum = null;
+    if (!vacio) {
       const valorStr = String(valorRaw).replace(",", ".").trim();
       if (!valorStr || Number.isNaN(Number(valorStr))) {
         // No es un guardado fallido sino un valor que todavía no es un
@@ -338,30 +402,80 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
         marcarGuardado(key, null);
         return;
       }
+      valorNum = Number(valorStr);
+    }
 
-      const { data, error } = await supabase
-        .from("mediciones")
-        .upsert(
-          { periodo_id: periodo.id, dia, parametro_id: parametroId, valor: Number(valorStr), usuario_id: usuario.id },
-          { onConflict: "periodo_id,dia,parametro_id" }
-        )
-        .select("usuario_id, usuarios(nombre)")
-        .single();
-      if (error) throw error;
-
-      setDuenos((prev) => ({
-        ...prev,
-        [dia]: { ...(prev[dia] || {}), [parametroId]: { usuario_id: data.usuario_id, usuario_nombre: data.usuarios?.nombre } },
-      }));
+    try {
+      const dueño = await enviarMedicion(dia, parametroId, valorNum);
+      setDuenos((prev) => {
+        const dia_ = { ...(prev[dia] || {}) };
+        if (dueño) dia_[parametroId] = dueño;
+        else delete dia_[parametroId];
+        return { ...prev, [dia]: dia_ };
+      });
+      quitarDeCola(periodo.id, dia, parametroId);
       marcarGuardado(key, "ok");
     } catch (e) {
-      const msg = /mediciones_valor_check/.test(e.message || "")
-        ? "Valor fuera de rango permitido"
-        : e.message || "No se pudo guardar el valor";
+      if (e.tipo === "red") {
+        // Sin conexión: se guarda localmente y se reintenta solo al
+        // reconectar (ver vaciarCola). No es un error para avisar con
+        // toast, es el caso esperado.
+        encolar(periodo.id, dia, parametroId, valorNum);
+        marcarGuardado(key, "pendiente");
+        return;
+      }
+      quitarDeCola(periodo.id, dia, parametroId);
       marcarGuardado(key, "error");
-      mostrarToast("error", msg);
+      mostrarToast("error", e.mensaje || "No se pudo guardar el valor");
     }
   }
+
+  // Reenvía lo que haya quedado en la cola local. Se dispara al montar
+  // (por si quedó algo pendiente de una sesión anterior) y cada vez que
+  // el navegador avisa que volvió la conexión. `vaciandoRef` evita que
+  // dos disparos superpuestos (mount + un 'online' casi simultáneo)
+  // procesen la misma cola en paralelo.
+  async function vaciarCola() {
+    if (vaciandoRef.current) return;
+    vaciandoRef.current = true;
+    try {
+      const cola = leerCola(periodo.id);
+      for (const { dia, parametroId, valor } of Object.values(cola)) {
+        const key = `${dia}:${parametroId}`;
+        marcarGuardado(key, "guardando");
+        try {
+          const dueño = await enviarMedicion(dia, parametroId, valor);
+          setDuenos((prev) => {
+            const dia_ = { ...(prev[dia] || {}) };
+            if (dueño) dia_[parametroId] = dueño;
+            else delete dia_[parametroId];
+            return { ...prev, [dia]: dia_ };
+          });
+          quitarDeCola(periodo.id, dia, parametroId);
+          marcarGuardado(key, "ok");
+        } catch (e) {
+          if (e.tipo === "red") {
+            // Se volvió a cortar la conexión a mitad del reenvío: se deja
+            // en la cola y no tiene sentido seguir con el resto ahora.
+            marcarGuardado(key, "pendiente");
+            break;
+          }
+          quitarDeCola(periodo.id, dia, parametroId);
+          marcarGuardado(key, "error");
+          mostrarToast("error", e.mensaje || "No se pudo guardar el valor");
+        }
+      }
+    } finally {
+      vaciandoRef.current = false;
+    }
+  }
+
+  // No incluye vaciarCola en las dependencias a propósito: se redefine en
+  // cada render (no está en useCallback) y lo único que debe disparar el
+  // reintento es el cambio de `online`, no cada render.
+  useEffect(() => {
+    if (online) vaciarCola();
+  }, [online]);
 
   function setValor(dia, parametroId, valor, { debounced } = {}) {
     setRegistros((prev) => {
@@ -603,6 +717,14 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
             <p className="text-xs" style={{ color: "#64748b" }}>Período {periodo.mes}/{periodo.anio} · {dias} días · tolerancia ±{tol}%</p>
           </div>
           <div className="flex items-center gap-2">
+            {(!online || pendientesCount > 0) && (
+              <span
+                className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold"
+                style={{ background: "#fffbeb", color: "#b45309", border: "1px solid #fde68a" }}
+              >
+                <CloudOff size={14} /> {online ? `${pendientesCount} cambio${pendientesCount === 1 ? "" : "s"} por enviar` : "Sin conexión"}
+              </span>
+            )}
             <button onClick={() => cargarMediciones(false)} disabled={refrescando} className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold" style={navBtnStyle(false)}>
               <RefreshCw size={15} className={refrescando ? "animate-spin" : ""} /> Actualizar
             </button>
@@ -749,6 +871,11 @@ export default function MonitoreoOsmosisInversa({ usuario, sede, periodo, onCamb
                       {estadoGuardado === "ok" && (
                         <p className="text-xs mt-2 flex items-center gap-1.5" style={{ color: "#16a34a" }}>
                           <CheckCircle2 size={12} /> Guardado
+                        </p>
+                      )}
+                      {estadoGuardado === "pendiente" && (
+                        <p className="text-xs mt-2 flex items-center gap-1.5" style={{ color: "#b45309" }}>
+                          <CloudOff size={12} /> Sin conexión — se guardará solo
                         </p>
                       )}
                       {estadoGuardado === "error" && (
