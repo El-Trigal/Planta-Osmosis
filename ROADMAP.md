@@ -111,31 +111,37 @@ punto, con una migración nueva.
     conexión → ver "pendiente" → reconectar → ver que se reenvía solo):
     requiere loguearse con una sesión real de Supabase, que no se hizo en
     esta sesión de trabajo. Si algo no cuadra en planta, empezar por acá.
-- **Respaldos** (pendiente — analizado en agosto de 2026, falta decidir e
-  implementar). El plan Free de Supabase **no corre ningún respaldo
-  automático** (los diarios empiezan en Pro), así que hoy la única copia de
-  las mediciones es la base viva. Sale gratis hacerlo con un Action, pero
-  con tres condiciones que no son opcionales:
-  - **El dump va cifrado, sí o sí.** Este repo es público y los artifacts de
-    un repo público los puede descargar cualquiera. Subir el volcado en
-    claro es publicar la base (correos de usuarios, empresas, mediciones).
-    `gpg --symmetric` con la passphrase en un secret del repo — y esa
-    passphrase guardada además fuera de GitHub, o el respaldo no se puede
-    restaurar.
-  - **Conexión por el pooler, no directa.** `db.<ref>.supabase.co` es solo
-    IPv6 y los runners de GitHub son IPv4: hay que ir por el session pooler
-    (puerto 5432, no el 6543 de transaction mode, que no sirve para
-    `pg_dump`). Y el `pg_dump` del runner tiene que ser de la misma major
-    que el Postgres del proyecto.
+- **Respaldos** ✅ (`.github/workflows/respaldo.yml`, documentado en
+  `db/RESPALDOS.md`). El plan Free de Supabase no corre ningún respaldo
+  automático — los diarios empiezan en Pro — así que sin esto la única copia
+  de las mediciones era la base viva. `pg_dump` diario, cifrado y subido como
+  artifact con 90 días de retención. Sale $0: en repos públicos ni los
+  minutos de Actions ni el almacenamiento de artifacts se facturan.
+  - **Cifrado obligatorio, no opcional.** Este repo es público y los
+    artifacts de un repo público los descarga cualquiera: en claro esto
+    sería publicar los correos de los usuarios y todas las mediciones. Se
+    cifra con `gpg --symmetric` (AES256), y un paso del workflow aborta si
+    encuentra un `.sql` sin cifrar en la carpeta que se publica.
+  - **Conexión por el session pooler.** `db.<ref>.supabase.co` es solo IPv6
+    y los runners de GitHub son IPv4; y el 6543 es transaction mode, que no
+    soporta `pg_dump`. El workflow verifica las dos cosas y falla con un
+    mensaje explícito en vez de con un timeout críptico. `pg_dump` se
+    instala de PGDG en la 17, que cubre tanto proyectos Supabase en 15 como
+    en 17 (al revés — cliente viejo, servidor nuevo — falla).
+  - **`auth` es mejor esfuerzo.** Se vuelcan los datos de `auth.users` y
+    `auth.identities` para que los logins sobrevivan; si el rol del pooler
+    no los puede leer, queda una advertencia y el run sigue. `public` es lo
+    que no se puede reconstruir; los usuarios sí, por la Edge Function.
+  - **Falta para darlo por cerrado:** cargar los dos secrets
+    (`SUPABASE_DB_URL`, `RESPALDO_PASSPHRASE`), correr el workflow a mano una
+    vez, y **probar una restauración completa** contra un proyecto de prueba.
+    El workflow verifica en cada run que el archivo se descifra y descomprime,
+    pero eso no prueba que el `.sql` restaure. Todo esto necesita credenciales
+    reales, así que no se hizo en la sesión que lo escribió.
   - **Un cron que se apaga solo no es un respaldo.** GitHub deshabilita los
-    workflows `schedule` de un repo sin commits por 60 días. Si el proyecto
-    se queda quieto unos meses — que es justo cuando el respaldo importa —
-    hay que verificar que siga corriendo.
-
-  Alternativa más simple si `pg_dump` da pelea: exportar solo los datos por
-  la API REST a JSON. El esquema ya está versionado en `db/`, así que basta
-  con las filas; a cambio, restaurar deja de ser un `psql` y pasa a ser
-  correr `db/` y recargar los datos.
+    workflows `schedule` de un repo sin commits por 60 días — justo cuando el
+    proyecto se aquieta es cuando el respaldo más importa. Anotado en
+    `db/RESPALDOS.md` como chequeo periódico.
 - **Reemplazar `xlsx@0.18.5`** ✅ — arrastraba vulnerabilidades conocidas
   (prototype pollution / ReDoS) y la versión parchada de SheetJS no se
   publica en npm. Se migró la exportación de `MonitoreoOsmosisInversa.jsx`

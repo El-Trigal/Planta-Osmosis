@@ -1,0 +1,175 @@
+name: Respaldo de la base
+
+# El plan Free de Supabase no corre ningún respaldo automático (los diarios
+# empiezan en Pro), así que sin esto la única copia de las mediciones es la
+# base viva. Corre a diario porque en repos públicos los minutos de Actions
+# y el almacenamiento de artifacts no se facturan: hacerlo semanal no
+# ahorraría nada y expondría hasta 7 días de captura en vez de 1.
+#
+# El volcado se sube SIEMPRE cifrado. Este repo es público y los artifacts de
+# un repo público los descarga cualquiera: subirlo en claro sería publicar
+# los correos de los usuarios y todas las mediciones.
+#
+# Ver db/RESPALDOS.md para los secrets que hace falta configurar y para el
+# procedimiento de restauración.
+
+on:
+  schedule:
+    # 07:00 UTC = 02:00 en Colombia, fuera del horario de captura en planta.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: respaldo
+  cancel-in-progress: false
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que estén los secrets
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.RESPALDO_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          faltan=""
+          [ -n "$DB_URL" ] || faltan="$faltan SUPABASE_DB_URL"
+          [ -n "$PASSPHRASE" ] || faltan="$faltan RESPALDO_PASSPHRASE"
+          if [ -n "$faltan" ]; then
+            echo "Faltan secrets del repositorio:$faltan" >&2
+            echo "Ver db/RESPALDOS.md para saber de dónde sale cada uno." >&2
+            exit 1
+          fi
+
+          # Las dos trampas de conexión, verificadas antes de gastar el resto
+          # del job. No se imprime la cadena: solo el diagnóstico.
+          if printf '%s' "$DB_URL" | grep -qE 'db\.[a-z0-9]+\.supabase\.co'; then
+            echo "SUPABASE_DB_URL apunta a la conexión directa, que es solo IPv6." >&2
+            echo "Los runners de GitHub son IPv4: hay que usar el session pooler." >&2
+            exit 1
+          fi
+          if printf '%s' "$DB_URL" | grep -q ':6543'; then
+            echo "El puerto 6543 es el pooler en transaction mode y no sirve para pg_dump." >&2
+            echo "Usar el session pooler, puerto 5432." >&2
+            exit 1
+          fi
+
+      - name: Instalar pg_dump 17
+        # El pg_dump del runner tiene que ser de una major >= la del servidor
+        # (al revés falla). Supabase corre 15 o 17 según cuándo se creó el
+        # proyecto, así que 17 cubre los dos casos.
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          pg_dump --version
+
+      - name: Volcar y cifrar
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.RESPALDO_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # El volcado en claro vive en un temporal; a la carpeta que se sube
+          # solo entran archivos ya cifrados.
+          tmp="$(mktemp -d)"
+          dest="$GITHUB_WORKSPACE/respaldo"
+          mkdir -p "$dest"
+          fecha="$(date -u +%Y%m%dT%H%M%SZ)"
+
+          # 1. public: esquema + datos. Es lo irreemplazable — empresas,
+          #    sedes, períodos, parámetros congelados y mediciones.
+          pg_dump "$DB_URL" \
+            --schema=public \
+            --no-owner --no-privileges \
+            --quote-all-identifiers \
+            --file="$tmp/public_$fecha.sql"
+
+          # 2. auth: solo los datos de las tablas que hacen falta para que los
+          #    logins sobrevivan a una restauración. Es "mejor esfuerzo": si el
+          #    rol del pooler no las puede leer, se avisa y el respaldo sigue
+          #    siendo válido — public es lo que no se puede reconstruir, los
+          #    usuarios sí se pueden recrear por la Edge Function.
+          auth_ok=1
+          if ! pg_dump "$DB_URL" \
+                --data-only \
+                --table=auth.users --table=auth.identities \
+                --no-owner --no-privileges \
+                --quote-all-identifiers \
+                --file="$tmp/auth_$fecha.sql"; then
+            auth_ok=0
+            rm -f "$tmp/auth_$fecha.sql"
+            echo "::warning::No se pudo volcar el esquema auth (permisos del rol). El respaldo de public sí se hizo; restaurar va a requerir recrear los usuarios."
+          fi
+
+          for f in "$tmp"/*.sql; do
+            gzip -9 "$f"
+          done
+
+          for f in "$tmp"/*.sql.gz; do
+            # La passphrase entra por fd 0 y no por la línea de comandos, que
+            # sería visible en la tabla de procesos del runner.
+            printf '%s' "$PASSPHRASE" | gpg --batch --yes --quiet \
+              --pinentry-mode loopback --passphrase-fd 0 \
+              --symmetric --cipher-algo AES256 \
+              --output "$dest/$(basename "$f").gpg" "$f"
+          done
+
+          {
+            echo "Respaldo $fecha"
+            echo "commit:   $GITHUB_SHA"
+            echo "workflow: $GITHUB_RUN_ID"
+            echo "pg_dump:  $(pg_dump --version)"
+            if [ "$auth_ok" -eq 1 ]; then
+              echo "auth:     incluido (auth.users, auth.identities)"
+            else
+              echo "auth:     NO incluido — ver el log del run"
+            fi
+            echo
+            echo "Descifrar: gpg --decrypt ARCHIVO.gpg > salida.sql.gz"
+            echo "Restaurar: ver db/RESPALDOS.md"
+          } > "$dest/MANIFIESTO.txt"
+
+          rm -rf "$tmp"
+
+      - name: Verificar que se puede descifrar y que no quedó nada en claro
+        env:
+          PASSPHRASE: ${{ secrets.RESPALDO_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          dest="$GITHUB_WORKSPACE/respaldo"
+
+          # Un respaldo que no se puede abrir no es un respaldo: se comprueba
+          # acá, no el día que haga falta.
+          for f in "$dest"/*.gpg; do
+            printf '%s' "$PASSPHRASE" | gpg --batch --quiet \
+              --pinentry-mode loopback --passphrase-fd 0 \
+              --decrypt "$f" | gzip -t
+            echo "ok: $(basename "$f")"
+          done
+
+          # Red de seguridad por si un cambio futuro deja un .sql sin cifrar
+          # en la carpeta que se publica.
+          if find "$dest" -name '*.sql' -o -name '*.sql.gz' | grep -q .; then
+            echo "Hay archivos sin cifrar en la carpeta del artifact. Se aborta." >&2
+            exit 1
+          fi
+
+      - name: Subir el respaldo
+        uses: actions/upload-artifact@v4
+        with:
+          name: respaldo-${{ github.run_id }}
+          path: respaldo/
+          retention-days: 90
+          if-no-files-found: error
