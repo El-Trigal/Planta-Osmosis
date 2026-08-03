@@ -20,9 +20,12 @@ Stack 100% Supabase + GitHub Pages: no hay servidor propio que mantener.
 db/schema.sql                              → Tablas, constraints y triggers (línea base, idempotente)
 db/rls.sql                                 → Funciones helper y políticas RLS (correr después de schema.sql)
 db/migrations/                             → Cambios de esquema posteriores, en orden numérico
+db/RESPALDOS.md                            → Cómo activar, leer y restaurar los respaldos
 supabase/functions/gestionar-usuario/      → Edge Function (crear/editar usuarios)
 web/                                       → Proyecto Vite/React
 .github/workflows/deploy.yml               → Build + deploy a GitHub Pages en cada push a main
+.github/workflows/ci.yml                   → Build de verificación en cada pull request
+.github/workflows/respaldo.yml             → pg_dump diario cifrado (ver db/RESPALDOS.md)
 ```
 
 ---
@@ -109,6 +112,30 @@ que funcione hacen falta dos cosas en el dashboard de Supabase:
 Aunque no configures nada de esto, nadie queda bloqueado: un `admin` o `super`
 puede restablecerle la contraseña a cualquiera desde **Panel de administración →
 Usuarios → editar**, sin correo de por medio.
+
+---
+
+## Paso 7 — Activar los respaldos
+
+**El plan Free de Supabase no corre ningún respaldo automático** (los diarios
+empiezan en Pro). `.github/workflows/respaldo.yml` lo suple: `pg_dump` diario,
+cifrado y subido como artifact con 90 días de retención. En un repo público no
+cuesta nada — ni los minutos de Actions ni el almacenamiento de artifacts se
+facturan.
+
+El workflow ya está en `main`, pero **no respalda nada hasta que se carguen dos
+secrets** (`SUPABASE_DB_URL` con la cadena del *session pooler*, y
+`RESPALDO_PASSPHRASE`). El paso a paso completo — de dónde sale cada valor, cómo
+leer el resultado del run y cómo restaurar — está en
+[`db/RESPALDOS.md`](db/RESPALDOS.md), que además lleva el checklist de qué falta.
+
+Dos cosas que conviene saber antes de tocarlo:
+
+- **El volcado va cifrado y no es opcional**: este repo es público y los
+  artifacts de un repo público los descarga cualquiera.
+- **La passphrase hay que guardarla fuera de GitHub.** Un secret de Actions se
+  escribe pero no se puede volver a leer; si se pierde, los respaldos quedan
+  como archivos que nadie puede abrir.
 
 ---
 
