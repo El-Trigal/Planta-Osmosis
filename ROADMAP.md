@@ -1,8 +1,8 @@
 # Roadmap
 
 Plan de trabajo de "próximos pasos" acordado a partir de una revisión completa
-del proyecto en agosto de 2026. Se ejecuta en `claude/project-next-steps-0rpzhu`,
-una fase por vez, cada una con su propio commit.
+del proyecto en agosto de 2026. Se ejecuta una fase por vez, cada una con su
+propio commit. Las fases 1 a 3 ya están en `main` y desplegadas.
 
 Si retomás este trabajo sin el contexto de la conversación original, este
 archivo es la referencia. Actualizalo a medida que avances: marcá lo hecho, y
@@ -69,13 +69,10 @@ sus rangos estaban quemados en la constante `ETAPAS` del frontend y en un
 - **`ParametrosPanel.jsx`** — pestaña nueva en el AdminPanel para editar la
   plantilla de una sede o los rangos vigentes de uno de sus períodos.
 
-**Antes de desplegar esta fase en producción:** correr `0001` y `0002` en
-orden contra el proyecto Supabase. `0002` hace
-`ALTER TABLE mediciones DROP COLUMN param_id` — no pierde información (el
-valor queda preservado como `periodo_parametros.clave` del snapshot) pero es
-la primera migración de esta serie que toca una columna con datos reales.
-Conviene probarla primero en un proyecto de staging o un branch de Supabase
-si hay uno disponible, no directo en producción.
+**Migraciones `0001` y `0002` ya aplicadas en producción** (agosto de 2026).
+El esquema vivo del proyecto Supabase corresponde a `schema.sql` + `rls.sql` +
+`0001` + `0002`; de acá en adelante, todo cambio de esquema arranca desde ese
+punto, con una migración nueva.
 
 ## Fase 4 — Operación diaria (en curso)
 
@@ -114,9 +111,31 @@ si hay uno disponible, no directo en producción.
     conexión → ver "pendiente" → reconectar → ver que se reenvía solo):
     requiere loguearse con una sesión real de Supabase, que no se hizo en
     esta sesión de trabajo. Si algo no cuadra en planta, empezar por acá.
-- **Respaldos.** El tier gratuito de Supabase no garantiza point-in-time
-  recovery y hoy no hay ningún export automático. Un Action semanal que
-  vuelque las tablas a un artifact alcanzaría. (pendiente)
+- **Respaldos** (pendiente — analizado en agosto de 2026, falta decidir e
+  implementar). El plan Free de Supabase **no corre ningún respaldo
+  automático** (los diarios empiezan en Pro), así que hoy la única copia de
+  las mediciones es la base viva. Sale gratis hacerlo con un Action, pero
+  con tres condiciones que no son opcionales:
+  - **El dump va cifrado, sí o sí.** Este repo es público y los artifacts de
+    un repo público los puede descargar cualquiera. Subir el volcado en
+    claro es publicar la base (correos de usuarios, empresas, mediciones).
+    `gpg --symmetric` con la passphrase en un secret del repo — y esa
+    passphrase guardada además fuera de GitHub, o el respaldo no se puede
+    restaurar.
+  - **Conexión por el pooler, no directa.** `db.<ref>.supabase.co` es solo
+    IPv6 y los runners de GitHub son IPv4: hay que ir por el session pooler
+    (puerto 5432, no el 6543 de transaction mode, que no sirve para
+    `pg_dump`). Y el `pg_dump` del runner tiene que ser de la misma major
+    que el Postgres del proyecto.
+  - **Un cron que se apaga solo no es un respaldo.** GitHub deshabilita los
+    workflows `schedule` de un repo sin commits por 60 días. Si el proyecto
+    se queda quieto unos meses — que es justo cuando el respaldo importa —
+    hay que verificar que siga corriendo.
+
+  Alternativa más simple si `pg_dump` da pelea: exportar solo los datos por
+  la API REST a JSON. El esquema ya está versionado en `db/`, así que basta
+  con las filas; a cambio, restaurar deja de ser un `psql` y pasa a ser
+  correr `db/` y recargar los datos.
 - **Reemplazar `xlsx@0.18.5`** ✅ — arrastraba vulnerabilidades conocidas
   (prototype pollution / ReDoS) y la versión parchada de SheetJS no se
   publica en npm. Se migró la exportación de `MonitoreoOsmosisInversa.jsx`
@@ -132,17 +151,12 @@ si hay uno disponible, no directo en producción.
   reales); sí se validó que el build de Vite resuelve la build de
   navegador de exceljs sin polyfills y sin errores de consola.
 
-## Fase 5 — Cierre (pendiente)
-
-- **Vista consolidada entre sedes**, para admin/super: cumplimiento, alertas
-  abiertas y tendencias de varias sedes a la vez. Se vuelve bastante más
-  fácil (y más útil) ahora que cada sede tiene sus propios parámetros.
-- **Auditoría de aislamiento entre sedes/empresas.** Verificar de punta a
-  punta (RLS, Edge Function, joins del frontend) que un operario o admin no
-  pueda ver ni escribir datos de otra sede o empresa por ningún camino, y
-  dejarlo con pruebas.
-
 ## Decisiones tomadas que vale la pena recordar
+
+- **La Fase 5 se sacó del alcance** (agosto de 2026). Eran la vista
+  consolidada entre sedes y una auditoría de aislamiento con pruebas. Es una
+  decisión explícita, no un olvido: no volver a agregarlas sin que alguien
+  las pida. Con la Fase 4 cerrada, el roadmap se termina.
 
 - **Un operario puede crear períodos.** `periodos_insert` usa
   `puede_ver_sede(sede_id)`, heredado del PHP original. Se revisó
