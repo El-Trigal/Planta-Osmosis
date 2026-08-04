@@ -131,13 +131,20 @@ punto, con una migración nueva.
   - **`auth` es mejor esfuerzo.** Se vuelcan los datos de `auth.users` y
     `auth.identities` para que los logins sobrevivan; si el rol del pooler
     no los puede leer, queda una advertencia y el run sigue. `public` es lo
-    que no se puede reconstruir; los usuarios sí, por la Edge Function.
-  - **Falta para darlo por cerrado:** cargar los dos secrets
-    (`SUPABASE_DB_URL`, `RESPALDO_PASSPHRASE`), correr el workflow a mano una
-    vez, y **probar una restauración completa** contra un proyecto de prueba.
-    El workflow verifica en cada run que el archivo se descifra y descomprime,
-    pero eso no prueba que el `.sql` restaure. Todo esto necesita credenciales
-    reales, así que no se hizo en la sesión que lo escribió.
+    que no se puede reconstruir; los usuarios sí, por la Edge Function. En la
+    puesta en marcha real, el pooler sí pudo leerlos — no hizo falta caer al
+    modo mejor esfuerzo.
+  - **Puesta en marcha completa (2026-08-04):** secrets cargados, primer run
+    manual en verde y restauración probada — ver el detalle en
+    `db/RESPALDOS.md`. El primer run encontró un bug real: el runner de
+    `ubuntu-latest` ya trae `pg_dump` 16 en el `PATH` y `update-alternatives`
+    ahí no gestiona ese binario, así que instalar la 17 no lo reemplazaba y
+    el volcado abortaba contra el servidor 17.6 del proyecto. Corregido en
+    `89a8182` referenciando `pg_dump` por su ruta versionada explícita. La
+    restauración se probó contra un Postgres local descartable en vez de un
+    proyecto Supabase de prueba — más barato y repetible, con el límite de
+    que no ejercita el esquema `auth` real (`db/RESPALDOS.md` detalla qué
+    cubre y qué no).
   - **Un cron que se apaga solo no es un respaldo.** GitHub deshabilita los
     workflows `schedule` de un repo sin commits por 60 días — justo cuando el
     proyecto se aquieta es cuando el respaldo más importa. Anotado en

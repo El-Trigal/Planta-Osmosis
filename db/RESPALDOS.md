@@ -11,19 +11,65 @@ Respaldo de la base → Run workflow**.
 
 ## Estado
 
-El workflow ya está en `main` y activo, pero **todavía no respalda nada**:
-faltan los dos secrets. Checklist de puesta en marcha, en orden:
+**Cerrado y verificado de punta a punta** (2026-08-04).
 
 - [x] Workflow en `main` (GitHub solo corre los `schedule` desde la rama por
       defecto, y el botón "Run workflow" solo aparece si el archivo está ahí)
-- [ ] Secret `SUPABASE_DB_URL` cargado (paso 1)
-- [ ] Secret `RESPALDO_PASSPHRASE` cargado y guardado también fuera de GitHub (paso 2)
-- [ ] Primer run manual en verde (paso 4)
-- [ ] Restauración probada una vez contra un proyecto de prueba (paso 5)
+- [x] Secret `SUPABASE_DB_URL` cargado (paso 1)
+- [x] Secret `RESPALDO_PASSPHRASE` cargado y guardado también fuera de GitHub (paso 2)
+- [x] Primer run manual en verde (paso 4) — `run 30937670687`, con `auth`
+      incluido (el rol del pooler sí pudo leer `auth.users`/`auth.identities`,
+      no fue necesario caer al modo "mejor esfuerzo")
+- [x] Restauración probada (paso 5) — ver "Cómo se probó la restauración"
+      abajo. Con una salvedad: se validó contra Postgres local, no contra un
+      proyecto Supabase de prueba nuevo; ver esa sección para qué cubre y qué
+      no.
 
-Los últimos cuatro necesitan credenciales del proyecto Supabase, así que no
-pudieron hacerse en la sesión que escribió el workflow. **Hasta que el paso 5
-esté hecho, esto son archivos cifrados, no un respaldo verificado.**
+El primer run manual encontró y corrigió un bug real en el workflow: el
+runner de `ubuntu-latest` ya trae `postgresql-client-16` (también de PGDG) con
+su `pg_dump` en `/usr/bin`, y ahí `update-alternatives` solo gestiona `psql`,
+no `pg_dump` — instalar la versión 17 no reemplazaba el binario del `PATH`, y
+el volcado abortaba con "server version mismatch" contra el proyecto en
+Postgres 17.6. El fix (`89a8182`) referencia `pg_dump` por su ruta versionada
+explícita (`/usr/lib/postgresql/17/bin/pg_dump`) en vez de confiar en el
+`PATH`. Vale la pena recordarlo si un día se sube la versión del servidor y
+hay que tocar este workflow de nuevo: revisar primero si el `PATH` apunta a
+donde uno espera, no asumirlo.
+
+## Cómo se probó la restauración
+
+En vez de gastar el segundo proyecto del plan Free en un proyecto de prueba
+(como sugería originalmente este documento), se restauró contra un Postgres
+17 **local y descartable** (binarios portables, sin instalador, sin tocar el
+sistema) — misma prueba real de que el `.sql` restaura, sin gastar cupo de
+Supabase ni credenciales adicionales, y repetible en cualquier momento.
+
+- `public.sql` restauró **completo**: las 10 tablas, sus triggers y sus
+  políticas RLS, con datos reales (`sede_parametros`/`periodo_parametros` en
+  17 filas cada una, coincidiendo con la plantilla sembrada; `mediciones` en
+  0 porque el proyecto todavía no tiene captura diaria cargada — eso es el
+  estado real de la base, no un fallo del respaldo).
+- Los dos únicos errores al aplicarlo fueron esperados y benignos: `schema
+  "public" already exists` (un proyecto Supabase nuevo también trae `public`
+  precreado) y `relation "auth.users" does not exist` en una constraint que
+  referencia esa tabla — no existe en un Postgres vanilla sin la extensión
+  de Auth de Supabase. Ninguno de los dos bloqueó el resto del restore.
+- Para que las políticas de `db/rls.sql` (que llaman a `auth.uid()` /
+  `auth.role()`) pudieran aplicarse igual, se creó un esquema `auth` local
+  con esas dos funciones *stub*. Esto valida que no hay drift entre
+  `rls.sql` y lo que efectivamente se respalda — no valida el comportamiento
+  real de RLS, que sigue dependiendo de la extensión de Auth de Supabase.
+- **Lo que esta prueba no cubre** y sí cubriría un proyecto Supabase de
+  prueba real: que `auth.sql` restaure contra el esquema `auth` genuino de
+  Supabase (acá solo se verificó que el `.sql` tiene el `COPY` esperado para
+  el usuario existente, sin ejecutarlo), y cualquier diferencia de extensión
+  o de versión entre Postgres genérico y el Postgres administrado por
+  Supabase. Si en algún momento se sospecha de eso puntualmente, ahí sí vale
+  la pena el proyecto de prueba.
+- La passphrase de cifrado no se compartió en ningún momento fuera del
+  gestor de contraseñas de la organización: el descifrado se corrió en una
+  terminal aparte, y todo archivo `.sql` en claro (el propio y el del
+  Postgres local) se borró apenas terminó la verificación.
 
 ## Por qué va cifrado
 
