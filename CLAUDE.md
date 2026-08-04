@@ -24,6 +24,8 @@ Database changes (schema + RLS) are applied by running the SQL directly against 
 2. `db/rls.sql` — helper functions, column-protection triggers, RLS policies, grants
 3. `db/migrations/*.sql` — every schema change after the baseline, applied **in ascending numeric order, once each**. See `db/migrations/README.md`. Never edit a migration that has already been applied in production; fix it with a new one.
 
+There is no staging database — a migration is applied by hand against the only Postgres there is. `db/migrations/README.md` has a recipe for rehearsing one first against a disposable local cluster (including the `auth` schema stubs `rls.sql` needs, which a plain Postgres doesn't have); it takes about a minute and is the only way to find out that something doesn't apply *before* production does.
+
 Deploying the Edge Function:
 
 ```bash
@@ -45,6 +47,7 @@ Key building blocks in `db/rls.sql`:
 - `puede_ver_sede(sede_id)` / `puede_ver_periodo(periodo_id)` — the shared 3-way (super/admin/operario) access-check reused across `sedes`, `periodos`, and `mediciones` policies.
 - Column-protection triggers (`mediciones_proteger_columnas`, `usuarios_proteger_columnas`) — RLS policies only filter which *rows* are writable, not which *columns* within an otherwise-allowed row. These triggers separately pin `mediciones.usuario_id/periodo_id/dia/param_id` back to their original values on UPDATE, and block changes to `usuarios.rol/empresa_id/email` unless the writer is `service_role`. Without them, e.g. an admin's legitimate `UPDATE` on a measurement could silently reassign its ownership.
 - `usuarios` and `usuario_sedes` have **no client-facing INSERT/UPDATE policies at all** (SELECT only) — every write to those two tables goes through the Edge Function instead.
+- Grants live here, not only in the migration that created the table. `rls.sql` is re-runnable and is the *only* file the restore procedure in `db/RESPALDOS.md` reapplies after loading a dump — and the dump itself is taken with `--no-privileges`. A table whose `GRANT ... TO authenticated` exists only inside its migration therefore comes back from a backup with no privileges at all, which surfaces as a permission-denied on a table the app needs, on the worst possible day. Post-baseline tables are granted at the end of `rls.sql` inside a `to_regclass` guard, because on a fresh project this file runs before the migrations that create them.
 - Delete guards (`empresas_guardar_borrado`, `sedes_guardar_borrado`, `periodos_guardar_borrado`, added in `db/migrations/0001`) — the FKs in `schema.sql` are `ON DELETE CASCADE`, so without these `BEFORE DELETE` triggers deleting one empresa would silently take its sedes, periodos and every medición with it. Each raises a Spanish exception naming what still depends on the row; the frontend surfaces `error.message` verbatim, so those strings are user-facing copy.
 
 ### Edge Function `gestionar-usuario`
