@@ -11,7 +11,8 @@ Respaldo de la base → Run workflow**.
 
 ## Estado
 
-**Cerrado y verificado de punta a punta** (2026-08-04).
+**Cerrado y verificado de punta a punta** (2026-08-04) — con una sola casilla
+abierta, la de ver pasar el primer run automático.
 
 - [x] Workflow en `main` (GitHub solo corre los `schedule` desde la rama por
       defecto, y el botón "Run workflow" solo aparece si el archivo está ahí)
@@ -24,6 +25,13 @@ Respaldo de la base → Run workflow**.
       abajo. Con una salvedad: se validó contra Postgres local, no contra un
       proyecto Supabase de prueba nuevo; ver esa sección para qué cubre y qué
       no.
+- [ ] **Primer run automático (por `schedule`) en verde.** El único run
+      programado hasta ahora — el del 2026-08-04, `run 30897133299` — falló, y
+      falló por el bug de `pg_dump` que se corrigió después ese mismo día: el
+      run en verde es manual, sobre el commit ya corregido. No hay nada
+      pendiente de arreglar, pero el primer disparo desatendido (07:00 UTC del
+      día siguiente) todavía no se vio pasar. Mirarlo una vez en Actions y
+      marcar esta casilla.
 
 El primer run manual encontró y corrigió un bug real en el workflow: el
 runner de `ubuntu-latest` ya trae `postgresql-client-16` (también de PGDG) con
@@ -150,6 +158,14 @@ Al final del run, abajo de todo, tiene que aparecer el artifact
 **`respaldo-<id>`**. Desde acá ya corre solo todas las noches.
 
 ## Paso 5 — Probar una restauración (una vez)
+
+> **Ya está hecho** (2026-08-04), pero contra un Postgres local descartable, no
+> con el proyecto de prueba que describe este paso — ver
+> ["Cómo se probó la restauración"](#cómo-se-probó-la-restauración) arriba, que
+> además detalla qué cubrió esa prueba y qué no. Lo de abajo queda como la
+> versión más fiel (restaura contra un Supabase real, con su esquema `auth`);
+> para repetirlo después de una migración, la vía local es más barata y no gasta
+> uno de los dos proyectos del plan Free.
 
 El workflow verifica en cada run que el archivo se descifra y descomprime, pero
 **eso no prueba que el `.sql` restaure**. Para saberlo hay que hacerlo una vez:

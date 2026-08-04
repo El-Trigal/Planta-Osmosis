@@ -2,7 +2,9 @@
 
 Plan de trabajo de "próximos pasos" acordado a partir de una revisión completa
 del proyecto en agosto de 2026. Se ejecuta una fase por vez, cada una con su
-propio commit. Las fases 1 a 3 ya están en `main` y desplegadas.
+propio commit. Las cuatro fases están en `main` y desplegadas; con la Fase 4
+cerrada y la Fase 5 fuera de alcance, el roadmap no tiene trabajo abierto —
+lo que queda son las verificaciones anotadas dentro de cada fase.
 
 Si retomás este trabajo sin el contexto de la conversación original, este
 archivo es la referencia. Actualizalo a medida que avances: marcá lo hecho, y
@@ -74,7 +76,7 @@ El esquema vivo del proyecto Supabase corresponde a `schema.sql` + `rls.sql` +
 `0001` + `0002`; de acá en adelante, todo cambio de esquema arranca desde ese
 punto, con una migración nueva.
 
-## Fase 4 — Operación diaria (en curso)
+## Fase 4 — Operación diaria ✅ `df5a73a` · `d25b927` · `3e0a62b`
 
 - **Modo offline / PWA** ✅ (reconexión en caliente) — cubre el caso de
   "el período ya se cargó con conexión y el wifi se corta a mitad de la
@@ -107,6 +109,12 @@ punto, con una migración nueva.
     ("Sin conexión" / "N cambios por enviar"). Al montar, la cola local
     se superpone sobre lo cargado del servidor para no perder un valor
     tipeado si la página se recarga con algo sin enviar.
+  - **La cola se vacía solo para el período abierto.** `vaciarCola()` lee
+    `leerCola(periodo.id)`, así que lo pendiente de otro período espera a
+    que ese período se vuelva a abrir (la clave sigue en `localStorage`, no
+    se pierde). En el uso real — un operario carga el mes en curso — no
+    aparece; si algún día se vuelve común saltar entre períodos sin
+    conexión, es acá donde hay que mirar.
   - **Sin probar el flujo real de punta a punta** (escribir → cortar
     conexión → ver "pendiente" → reconectar → ver que se reenvía solo):
     requiere loguearse con una sesión real de Supabase, que no se hizo en
@@ -145,6 +153,11 @@ punto, con una migración nueva.
     proyecto Supabase de prueba — más barato y repetible, con el límite de
     que no ejercita el esquema `auth` real (`db/RESPALDOS.md` detalla qué
     cubre y qué no).
+  - **Falta ver pasar el primer run automático.** El run en verde fue
+    manual, sobre el commit ya corregido; el único disparo por `schedule`
+    que hubo es anterior al fix y falló por eso. Es una verificación
+    pendiente, no un problema conocido — anotada como casilla sin marcar en
+    `db/RESPALDOS.md`.
   - **Un cron que se apaga solo no es un respaldo.** GitHub deshabilita los
     workflows `schedule` de un repo sin commits por 60 días — justo cuando el
     proyecto se aquieta es cuando el respaldo más importa. Anotado en

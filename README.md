@@ -23,6 +23,7 @@ db/migrations/                             → Cambios de esquema posteriores, e
 db/RESPALDOS.md                            → Cómo activar, leer y restaurar los respaldos
 supabase/functions/gestionar-usuario/      → Edge Function (crear/editar usuarios)
 web/                                       → Proyecto Vite/React
+ROADMAP.md                                 → Qué se hizo en cada fase, qué quedó fuera de alcance y por qué
 .github/workflows/deploy.yml               → Build + deploy a GitHub Pages en cada push a main
 .github/workflows/ci.yml                   → Build de verificación en cada pull request
 .github/workflows/respaldo.yml             → pg_dump diario cifrado (ver db/RESPALDOS.md)
@@ -123,11 +124,13 @@ cifrado y subido como artifact con 90 días de retención. En un repo público n
 cuesta nada — ni los minutos de Actions ni el almacenamiento de artifacts se
 facturan.
 
-El workflow ya está en `main`, pero **no respalda nada hasta que se carguen dos
-secrets** (`SUPABASE_DB_URL` con la cadena del *session pooler*, y
-`RESPALDO_PASSPHRASE`). El paso a paso completo — de dónde sale cada valor, cómo
-leer el resultado del run y cómo restaurar — está en
-[`db/RESPALDOS.md`](db/RESPALDOS.md), que además lleva el checklist de qué falta.
+**En este proyecto ya está activo** (agosto de 2026): los dos secrets
+(`SUPABASE_DB_URL` con la cadena del *session pooler* y `RESPALDO_PASSPHRASE`)
+están cargados y la restauración se probó. Este paso es lo que hay que hacer en
+un despliegue nuevo — sin esos dos secrets el workflow no respalda nada. El paso
+a paso completo — de dónde sale cada valor, cómo leer el resultado del run y cómo
+restaurar — está en [`db/RESPALDOS.md`](db/RESPALDOS.md), que además lleva el
+estado al día.
 
 Dos cosas que conviene saber antes de tocarlo:
 
@@ -177,6 +180,35 @@ El campo **"agrupa como"** de cada parámetro es lo que permite comparar el mism
 ensayo a lo largo del proceso en la gráfica de tendencia: todos los parámetros
 que compartan ese valor (`ce`, `ph`, `cl`…) se dibujan superpuestos, una línea
 por etapa.
+
+---
+
+## Captura sin conexión
+
+La planta no siempre tiene wifi estable, así que **si la conexión se corta a
+mitad de la captura no se pierde nada de lo tecleado**:
+
+- La celda queda marcada como **pendiente** en vez de guardada, y arriba, junto
+  al período, aparece un aviso de **"Sin conexión"** o **"N cambios por enviar"**.
+- Cuando vuelve la conexión, esos valores se envían solos. También sobreviven a
+  recargar la página o cerrar el navegador: quedan guardados en el dispositivo
+  hasta que se puedan enviar.
+- Un valor rechazado por el servidor (fuera del rango permitido, o una celda que
+  ya escribió otro usuario) **no** es lo mismo: eso se muestra como error, con su
+  botón de reintentar, porque volver a mandarlo solo no lo arreglaría.
+
+Dos límites que conviene conocer:
+
+- Los pendientes se reenvían del período que se tenga abierto. Si se cambia de
+  período o de sede sin conexión, lo pendiente del anterior espera a que se
+  vuelva a abrir ese período.
+- **Hay que abrir el período al menos una vez con conexión.** Arrancar la
+  aplicación sin señal, en un período nunca visitado, no muestra la grilla:
+  se guarda la aplicación en el dispositivo, no los datos.
+
+La aplicación además **se puede instalar** en la tablet o el celular (Chrome:
+menú → "Instalar aplicación"); queda con su ícono, a pantalla completa, pero es
+la misma aplicación, no una versión distinta.
 
 ---
 
