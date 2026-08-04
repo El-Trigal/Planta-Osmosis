@@ -242,5 +242,25 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
     empresas, sedes, usuarios, usuario_sedes, periodos, mediciones
 TO authenticated;
+-- Las cuatro tablas de parámetros nacen en db/migrations/0002, no en esta
+-- línea base, así que en un proyecto nuevo este archivo corre antes de que
+-- existan y el GRANT lo hace la propia migración. El bloque guardado de
+-- abajo es para el otro escenario, el de restaurar un respaldo: el volcado
+-- corre con --no-privileges (no trae ningún GRANT) y db/RESPALDOS.md dice
+-- que después del .sql alcanza con volver a correr este archivo. Sin esto,
+-- eso solo sería cierto para las seis tablas de la línea base, y las de
+-- parámetros quedarían dependiendo de los privilegios por defecto que
+-- Supabase le da a `authenticated` sobre lo que se crea en public — algo
+-- que no está bajo control de este repo y que no aplica al restaurar
+-- contra un Postgres que no sea de Supabase.
+DO $$
+BEGIN
+    IF to_regclass('public.sede_etapas') IS NOT NULL THEN
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON
+                     sede_etapas, sede_parametros, periodo_etapas, periodo_parametros
+                 TO authenticated';
+    END IF;
+END $$;
+
 -- Las secuencias (ids autoincrementales) también necesitan uso explícito.
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;

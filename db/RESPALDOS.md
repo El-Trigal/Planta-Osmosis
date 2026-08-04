@@ -210,6 +210,12 @@ Igual que el paso 5, con dos aclaraciones:
 - `public.sql` trae las tablas con sus datos, pero `pg_dump` corrió con
   `--no-owner --no-privileges`: las políticas de RLS y los `GRANT` se reaplican
   corriendo `db/rls.sql`, que es la fuente de verdad de la autorización.
+  Ojo con esto si alguna vez se agregan tablas en una migración: los `GRANT`
+  de las cuatro tablas de parámetros de `0002` tuvieron que sumarse a
+  `rls.sql` (en un bloque guardado, porque en un proyecto nuevo todavía no
+  existen) justamente para que esta frase sea cierta. Una tabla nueva que
+  solo reciba su `GRANT` dentro de la migración queda sin privilegios al
+  restaurar.
   **No** hace falta correr `db/schema.sql` ni las migraciones: el volcado ya
   refleja el esquema con todas ellas aplicadas.
 - Si se restaura también `auth`, cargar `auth.sql` **antes** que `public.sql`
