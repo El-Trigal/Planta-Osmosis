@@ -62,6 +62,13 @@ jobs:
         # El pg_dump del runner tiene que ser de una major >= la del servidor
         # (al revés falla). Supabase corre 15 o 17 según cuándo se creó el
         # proyecto, así que 17 cubre los dos casos.
+        #
+        # El runner de ubuntu-latest ya trae postgresql-client-16 (también de
+        # PGDG) con su pg_dump en /usr/bin, y update-alternatives ahí solo
+        # gestiona psql, no pg_dump: instalar la 17 no reemplaza el binario
+        # del PATH, se queda apuntando al 16 y pg_dump aborta contra un
+        # servidor 17 con "server version mismatch". Por eso el paso
+        # siguiente usa la ruta versionada explícita, no `pg_dump` a secas.
         run: |
           set -euo pipefail
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -71,7 +78,8 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client-17
-          pg_dump --version
+          echo "PG_DUMP=/usr/lib/postgresql/17/bin/pg_dump" >> "$GITHUB_ENV"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Volcar y cifrar
         env:
@@ -90,7 +98,7 @@ jobs:
 
           # 1. public: esquema + datos. Es lo irreemplazable — empresas,
           #    sedes, períodos, parámetros congelados y mediciones.
-          pg_dump "$DB_URL" \
+          "$PG_DUMP" "$DB_URL" \
             --schema=public \
             --no-owner --no-privileges \
             --quote-all-identifiers \
@@ -102,7 +110,7 @@ jobs:
           #    siendo válido — public es lo que no se puede reconstruir, los
           #    usuarios sí se pueden recrear por la Edge Function.
           auth_ok=1
-          if ! pg_dump "$DB_URL" \
+          if ! "$PG_DUMP" "$DB_URL" \
                 --data-only \
                 --table=auth.users --table=auth.identities \
                 --no-owner --no-privileges \
@@ -130,7 +138,7 @@ jobs:
             echo "Respaldo $fecha"
             echo "commit:   $GITHUB_SHA"
             echo "workflow: $GITHUB_RUN_ID"
-            echo "pg_dump:  $(pg_dump --version)"
+            echo "pg_dump:  $("$PG_DUMP" --version)"
             if [ "$auth_ok" -eq 1 ]; then
               echo "auth:     incluido (auth.users, auth.identities)"
             else
